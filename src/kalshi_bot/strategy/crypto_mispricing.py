@@ -50,13 +50,23 @@ class CryptoMispricingStrategy:
     def evaluate(self, context: StrategyContext) -> Decision:
         cfg = self.config
 
-        def hold(reason: str, **kwargs) -> Decision:
+        def hold(
+            reason: str,
+            *,
+            bs_probability: float | None = None,
+            mc_probability: float | None = None,
+            raw_edge: float | None = None,
+            fee_adjusted_edge: float | None = None,
+        ) -> Decision:
             return Decision(
                 action=Action.HOLD,
                 market_ticker=context.market_ticker,
                 strategy_name=self.name,
                 hold_reason=reason,
-                **kwargs,
+                bs_probability=bs_probability,
+                mc_probability=mc_probability,
+                raw_edge=raw_edge,
+                fee_adjusted_edge=fee_adjusted_edge,
             )
 
         if context.minutes_to_expiry < cfg.min_minutes_to_expiry:
@@ -109,19 +119,23 @@ class CryptoMispricingStrategy:
             action, ev, raw, p_win = Action.BUY_NO, ev_no, raw_no, 1.0 - bs
             entry_cents = 100 - context.yes_bid_cents
 
-        common = dict(
-            bs_probability=bs,
-            mc_probability=mc,
-            raw_edge=raw,
-            fee_adjusted_edge=ev,
-        )
-
         if ev < cfg.min_edge:
-            return hold("insufficient_edge", **common)
-        if p_win < cfg.min_entry_probability:
-            return hold("probability_below_floor", **common)
-        if p_win > cfg.max_entry_probability:
-            return hold("probability_above_ceiling", **common)
+            reason = "insufficient_edge"
+        elif p_win < cfg.min_entry_probability:
+            reason = "probability_below_floor"
+        elif p_win > cfg.max_entry_probability:
+            reason = "probability_above_ceiling"
+        else:
+            reason = None
+
+        if reason is not None:
+            return hold(
+                reason,
+                bs_probability=bs,
+                mc_probability=mc,
+                raw_edge=raw,
+                fee_adjusted_edge=ev,
+            )
 
         confidence = min(1.0, ev / (2 * cfg.min_edge))
         return Decision(
@@ -130,5 +144,8 @@ class CryptoMispricingStrategy:
             strategy_name=self.name,
             confidence=confidence,
             entry_price_cents=entry_cents,
-            **common,
+            bs_probability=bs,
+            mc_probability=mc,
+            raw_edge=raw,
+            fee_adjusted_edge=ev,
         )
