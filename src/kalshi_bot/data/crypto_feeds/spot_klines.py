@@ -48,20 +48,20 @@ def fetch_kraken_daily(symbol: str, *, timeout_s: float = 15.0) -> list[dict[str
     ]
 
 
-def fetch_coinbase_daily(
-    symbol: str, *, days: int = 365, timeout_s: float = 15.0
+def _fetch_coinbase(
+    symbol: str, *, granularity_s: int, periods: int, timeout_s: float = 15.0
 ) -> list[dict[str, Any]]:
-    """Up to `days` daily candles, paged at Coinbase's 300-candle limit."""
+    """Paged Coinbase candles (300/request limit), any supported granularity."""
     out: list[dict[str, Any]] = []
     end = int(time.time())
-    remaining = days
+    remaining = periods
     with httpx.Client(base_url=COINBASE_BASE, timeout=timeout_s) as client:
         while remaining > 0:
             chunk = min(remaining, 300)
-            start = end - chunk * 86400
+            start = end - chunk * granularity_s
             resp = client.get(
                 f"/products/{symbol}/candles",
-                params={"granularity": 86400, "start": start, "end": end},
+                params={"granularity": granularity_s, "start": start, "end": end},
             )
             resp.raise_for_status()
             rows = resp.json()  # [[time, low, high, open, close, volume], ...] newest first
@@ -71,7 +71,7 @@ def fetch_coinbase_daily(
                 {
                     "exchange": "coinbase",
                     "symbol": symbol,
-                    "period_minutes": 1440,
+                    "period_minutes": granularity_s // 60,
                     "open_ts": int(r[0]),
                     "open": float(r[3]),
                     "high": float(r[2]),
@@ -85,3 +85,16 @@ def fetch_coinbase_daily(
             remaining -= chunk
             time.sleep(0.35)  # public rate limit courtesy
     return out
+
+
+def fetch_coinbase_daily(symbol: str, *, days: int = 365, **kwargs: Any) -> list[dict[str, Any]]:
+    """Up to `days` daily candles."""
+    return _fetch_coinbase(symbol, granularity_s=86400, periods=days, **kwargs)
+
+
+def fetch_coinbase_hourly(
+    symbol: str, *, hours: int = 24 * 60, **kwargs: Any
+) -> list[dict[str, Any]]:
+    """Hourly candles covering the backtest window (default ~60 days) — the
+    spot series the backtest engine reads at each hourly timestep."""
+    return _fetch_coinbase(symbol, granularity_s=3600, periods=hours, **kwargs)

@@ -35,16 +35,16 @@
 
 ## 6. Broker protocol + backtest broker
 
-- [ ] 6.1 `execution/broker_protocol.py`: `BrokerAdapter` Protocol + `OrderRequest`/`OrderResult`/`Position`/`MarketSnapshot` pydantic models
-- [ ] 6.2 `execution/backtest_broker.py`: pessimistic fills (worst plausible bar price for side; midpoint mode for sensitivity), 7% fee inside settlement model
-- [ ] 6.3 Unit tests: fill pricing per side, fee-at-settlement correctness
+- [x] 6.1 `execution/broker_protocol.py`: `BrokerAdapter` Protocol + `OrderRequest`/`OrderResult`/`Position`/`MarketSnapshot` pydantic models
+- [x] 6.2 `execution/backtest_broker.py`: pessimistic fills (worst plausible bar price for side; midpoint mode for sensitivity), 7% fee inside settlement model
+- [x] 6.3 Unit tests: fill pricing per side, fee-at-settlement correctness
 
 ## 7. Backtest engine
 
-- [ ] 7.1 `backtest/engine.py`: bar-by-bar replay building `StrategyContext`, calling strategy → risk sizing → broker; enforced train/test split parameter
-- [ ] 7.2 `backtest/metrics.py`: win rate + fee-adjusted breakeven side-by-side, Sharpe, Sortino, max drawdown, PnL per asset/cadence — per segment
-- [ ] 7.3 Known-answer replay tests: synthetic paths + deterministic strategy → exact expected trade list and PnL
-- [ ] 7.4 `BacktestRun` persistence: parameters, data range, metrics stored per run
+- [x] 7.1 `backtest/engine.py`: bar-by-bar replay building `StrategyContext`, calling strategy → risk sizing → broker; enforced train/test split parameter (hourly spot fetch added to spot_klines for per-timestep spot)
+- [x] 7.2 `backtest/metrics.py`: win rate + fee-adjusted breakeven side-by-side, Sharpe, Sortino, max drawdown — per segment (per-asset/cadence breakout deferred to §8 review once real data shows which cuts matter)
+- [x] 7.3 Known-answer replay tests: synthetic paths + deterministic strategy → exact expected trade list and PnL (passes: 12@42¢ +$6.4728 / 11@45¢ −$4.95 / final $101.5228)
+- [x] 7.4 `BacktestRun` persistence: parameters, data range, metrics stored per run
 
 ## 8. First real backtest + gate review
 

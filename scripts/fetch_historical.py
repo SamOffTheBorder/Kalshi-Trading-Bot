@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from kalshi_bot.data.crypto_feeds.spot_klines import (  # noqa: E402
     fetch_coinbase_daily,
+    fetch_coinbase_hourly,
     fetch_kraken_daily,
 )
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
@@ -121,7 +122,7 @@ def fetch_spot(session: Session) -> int:
     )
     inserted = 0
     for symbol in SPOT_SYMBOLS:
-        for fetch in (fetch_kraken_daily, fetch_coinbase_daily):
+        for fetch in (fetch_kraken_daily, fetch_coinbase_daily, fetch_coinbase_hourly):
             try:
                 rows = fetch(symbol)
             except Exception as exc:  # one source failing shouldn't kill the other
