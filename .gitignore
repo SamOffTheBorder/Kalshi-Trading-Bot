@@ -4,9 +4,9 @@ secrets/
 *.pem
 *.key
 
-# Data & logs
-data/
-logs/
+# Data & logs (root-anchored: src/kalshi_bot/data/ is source code)
+/data/
+/logs/
 *.db
 *.sqlite3
 *.csv

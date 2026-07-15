@@ -73,6 +73,31 @@ class Candle(Base):
     open_interest: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
+class KalshiMarket(Base):
+    """Market metadata needed to settle backtest positions: strike + result.
+
+    Candles alone can't settle a simulated position — the strike structure and
+    official result live here, captured when historical data is fetched.
+    """
+
+    __tablename__ = "kalshi_markets"
+    __table_args__ = (Index("ix_markets_series_close", "series_ticker", "close_ts"),)
+
+    ticker: Mapped[str] = mapped_column(String(64), primary_key=True)
+    series_ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    event_ticker: Mapped[str | None] = mapped_column(String(64))
+    title: Mapped[str | None] = mapped_column(String(256))
+
+    strike_type: Mapped[str | None] = mapped_column(String(16))  # greater|less|between|...
+    floor_strike: Mapped[float | None] = mapped_column(Float)
+    cap_strike: Mapped[float | None] = mapped_column(Float)
+
+    open_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    close_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # settled|closed|active
+    result: Mapped[str | None] = mapped_column(String(8))  # yes|no|None until settled
+
+
 class SpotCandle(Base):
     """Crypto spot kline (USD floats) from a CF Benchmarks constituent exchange.
 

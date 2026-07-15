@@ -8,12 +8,12 @@
 
 ## 2. Kalshi market data (verify availability FIRST)
 
-- [ ] 2.1 `data/kalshi/client.py`: unauthenticated httpx client — markets, events, series, historical candlesticks; client-side rate limiter (≤20 req/s), exponential backoff on 429/5xx, fail-fast on 401/403
-- [ ] 2.2 **Spike: fetch real candlestick coverage for KXBTC, KXBTCD, KXETH, KXETHD** — record earliest available history per series in the change notes; this answers the design's open question and determines the out-of-sample split
-- [ ] 2.3 `data/kalshi/coverage.py`: per-series coverage report (first/last candle, gaps)
-- [ ] 2.4 `scripts/fetch_historical.py`: bulk pull into storage, idempotent re-runs
-- [ ] 2.5 Crypto spot history for volatility: Coinbase/Kraken daily klines fetch (CF Benchmarks constituents)
-- [ ] 2.6 Unit tests with recorded/mocked responses; integration-marked test hitting the real public endpoint
+- [x] 2.1 `data/kalshi/client.py`: unauthenticated httpx client — markets, events, series, historical candlesticks; client-side rate limiter (≤20 req/s), exponential backoff on 429/5xx, fail-fast on 401/403
+- [x] 2.2 **Spike: fetch real candlestick coverage for KXBTC, KXBTCD, KXETH, KXETHD** — findings in `notes.md`: ~6-week rolling retention (earliest ~2026-06-01), dollar-string payload format, sparse 1-min candles → archive continuously, 60-min primary
+- [x] 2.3 `data/kalshi/coverage.py`: per-series coverage report (first/last candle, gaps)
+- [x] 2.4 `scripts/fetch_historical.py`: bulk pull into storage, idempotent re-runs (resume via already-candled ticker skip)
+- [x] 2.5 Crypto spot history for volatility: Coinbase/Kraken daily klines fetch (CF Benchmarks constituents)
+- [x] 2.6 Unit tests with recorded/mocked responses; integration-marked test hitting the real public endpoint
 
 ## 3. Pricing signals (known-answer tests before integration)
 
