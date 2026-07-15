@@ -31,7 +31,7 @@ from kalshi_bot.data.crypto_feeds.spot_klines import (  # noqa: E402
 )
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
 from kalshi_bot.data.kalshi.coverage import coverage_report  # noqa: E402
-from kalshi_bot.data.kalshi.parse import parse_candle, parse_market  # noqa: E402
+from kalshi_bot.data.kalshi.parse import fp_to_int, parse_candle, parse_market  # noqa: E402
 from kalshi_bot.storage import (  # noqa: E402
     Candle,
     KalshiMarket,
@@ -84,7 +84,8 @@ def fetch_series(
         # Most strikes per period are far OTM with zero lifetime volume —
         # candles for markets nobody ever traded are simulation fantasy and
         # cost one request each. Market metadata is still stored above.
-        never_traded = not raw.get("volume")
+        # NOTE: the live payload exposes volume as `volume_fp` decimal string.
+        never_traded = fp_to_int(raw.get("volume_fp")) == 0
         if skip_zero_volume and never_traded:
             markets_done += 1
             continue
