@@ -46,6 +46,10 @@ def _default_repr(field) -> str:
         return ""
     if isinstance(default, bool):
         return str(default).lower()
+    if isinstance(default, Path):
+        # Forward slashes regardless of platform, so the generated file is
+        # identical on Windows dev machines and Linux CI.
+        return default.as_posix()
     return str(default)
 
 
