@@ -30,8 +30,8 @@
 
 ## 5. Risk sizing
 
-- [ ] 5.1 `risk/kelly.py`: binary fractional Kelly, `min()` clamp at `max_position_pct` — port v1 math with edge-case tests (zero/negative edge, cap exceeded, near-zero bankroll)
-- [ ] 5.2 `risk/drawdown_guard.py`: NORMAL/PAUSED/HALTED state machine, thresholds only from Settings; state-transition boundary tests
+- [x] 5.1 `risk/kelly.py`: binary fractional Kelly (generalized to fee-adjusted net odds; reduces to v1's (p−c)/(1−c) at fee=0), `min()` clamp at `max_position_pct` — edge-case tests (zero/negative edge, cap exceeded, near-zero bankroll)
+- [x] 5.2 `risk/drawdown_guard.py`: NORMAL/PAUSED/HALTED state machine (HALTED sticky until human reset), thresholds only from Settings; state-transition boundary tests
 
 ## 6. Broker protocol + backtest broker
 
