@@ -117,9 +117,7 @@ def fetch_series(
 def fetch_spot(session: Session) -> int:
     """Daily spot klines from both CF Benchmarks constituent sources."""
     existing: set[tuple[str, str, int]] = set(
-        session.execute(
-            select(SpotCandle.exchange, SpotCandle.symbol, SpotCandle.open_ts)
-        ).tuples()
+        session.execute(select(SpotCandle.exchange, SpotCandle.symbol, SpotCandle.open_ts)).tuples()
     )
     inserted = 0
     for symbol in SPOT_SYMBOLS:

@@ -17,16 +17,16 @@
 
 ## 3. Pricing signals (known-answer tests before integration)
 
-- [ ] 3.1 `signals/black_scholes.py`: N(d2) digital fair value + range/bucket via digital difference — port from v1 with tests against analytic values (1e-9 tolerance)
-- [ ] 3.2 `signals/monte_carlo.py`: Student-t GBM paths, probability estimate + BS/MC divergence measure; test convergence to BS under near-normal df
-- [ ] 3.3 `signals/volatility.py`: 30d-historical → EWMA → intraday fallback chain, labeled source; tests for each fallback trigger
+- [x] 3.1 `signals/black_scholes.py`: N(d2) digital fair value + range/bucket via digital difference — port from v1 with tests against analytic values (1e-9 tolerance)
+- [x] 3.2 `signals/monte_carlo.py`: Student-t GBM paths, probability estimate + BS/MC divergence measure; test convergence to BS under near-normal df
+- [x] 3.3 `signals/volatility.py`: 30d-historical → EWMA → intraday fallback chain, labeled source; tests for each fallback trigger
 
 ## 4. Strategy layer
 
-- [ ] 4.1 `strategy/base.py`: `StrategyProtocol`, `StrategyContext`, `Decision` types — zero imports from data/execution modules
-- [ ] 4.2 `strategy/crypto_mispricing.py`: fee-adjusted edge (7% on net winnings, subtracted before gates), BS/MC divergence guard, min-edge threshold from Settings
-- [ ] 4.3 Persist every Decision (including HOLD + reason) via storage
-- [ ] 4.4 Unit tests: fee flips marginal edge to HOLD; divergence blocks entry; edge math against hand-computed cases
+- [x] 4.1 `strategy/base.py`: `StrategyProtocol`, `StrategyContext`, `Decision` types — zero imports from data/execution modules (enforced by test)
+- [x] 4.2 `strategy/crypto_mispricing.py`: fee-adjusted edge (7% on net winnings, subtracted before gates), BS/MC divergence guard, min-edge threshold from Settings
+- [x] 4.3 Persist every Decision (including HOLD + reason) via storage (`storage/records.py`)
+- [x] 4.4 Unit tests: fee flips marginal edge to HOLD; divergence blocks entry; edge math against hand-computed cases
 
 ## 5. Risk sizing
 

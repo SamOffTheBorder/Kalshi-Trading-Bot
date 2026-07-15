@@ -8,6 +8,7 @@ any market in the series.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -76,7 +77,7 @@ def coverage_report(
     )
     gaps: list[tuple[int, int]] = []
     period_s = period_minutes * 60
-    for prev, cur in zip(ts_rows, ts_rows[1:], strict=False):
+    for prev, cur in itertools.pairwise(ts_rows):
         if cur - prev > period_s:
             gaps.append((prev, cur))
     return CoverageReport(

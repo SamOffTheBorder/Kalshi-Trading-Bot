@@ -88,6 +88,42 @@ class Settings(BaseSettings):
         "applied AFTER Kelly sizing as a min() clamp. Kelly output can never exceed this.",
     )
 
+    # --- Strategy gates ---------------------------------------------------------
+    min_edge: float = Field(
+        default=0.05,
+        gt=0.0,
+        lt=0.5,
+        description="Minimum fee-adjusted edge (expected value per contract dollar) "
+        "required to enter. Fee is subtracted BEFORE this gate.",
+    )
+    max_model_divergence: float = Field(
+        default=0.06,
+        gt=0.0,
+        lt=0.5,
+        description="Maximum |BS - MC| probability disagreement. Larger divergence "
+        "means the pricing model is strained -> HOLD regardless of apparent edge.",
+    )
+    min_entry_probability: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Skip contracts whose estimated win probability is below this "
+        "(longshot-bias guard; v1's losses clustered in cheap contracts).",
+    )
+    max_entry_probability: float = Field(
+        default=0.80,
+        ge=0.0,
+        le=1.0,
+        description="Skip contracts whose estimated win probability is above this "
+        "(overpriced-favorite guard; thin payoff rarely survives fees).",
+    )
+    min_minutes_to_expiry: float = Field(
+        default=10.0,
+        ge=0.0,
+        description="No new entries closer to expiry than this — near-expiry gamma "
+        "noise makes model estimates unreliable.",
+    )
+
     # --- Drawdown circuit breakers -------------------------------------------
     max_drawdown_pause_pct: float = Field(
         default=0.25,

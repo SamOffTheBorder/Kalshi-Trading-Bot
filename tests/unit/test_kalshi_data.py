@@ -104,9 +104,7 @@ def test_parse_market():
 
 def _client_with(handler) -> KalshiPublicClient:
     client = KalshiPublicClient(max_reads_per_second=1000)
-    client._client = httpx.Client(
-        base_url="https://test", transport=httpx.MockTransport(handler)
-    )
+    client._client = httpx.Client(base_url="https://test", transport=httpx.MockTransport(handler))
     return client
 
 
