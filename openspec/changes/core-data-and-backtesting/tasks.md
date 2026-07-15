@@ -2,9 +2,9 @@
 
 ## 1. Storage foundation
 
-- [ ] 1.1 `storage/models.py`: SQLAlchemy 2.0 models — `Candle`, `SignalRecord`, `SimulatedTrade`, `BacktestRun` (single schema of record; no SQLite-only column types)
-- [ ] 1.2 `storage/db.py`: engine/session factory reading `Settings.db_path`
-- [ ] 1.3 Unit tests: model round-trips, candle unique-constraint dedup
+- [x] 1.1 `storage/models.py`: SQLAlchemy 2.0 models — `Candle`, `SignalRecord`, `SimulatedTrade`, `BacktestRun` (single schema of record; no SQLite-only column types) — plus `SpotCandle` for task 2.5's klines
+- [x] 1.2 `storage/db.py`: engine/session factory reading `Settings.db_path`
+- [x] 1.3 Unit tests: model round-trips, candle unique-constraint dedup
 
 ## 2. Kalshi market data (verify availability FIRST)
 
