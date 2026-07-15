@@ -1,0 +1,8 @@
+{
+  "label": "Runbooks",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "Operational procedures for running the bot's pipelines."
+  }
+}

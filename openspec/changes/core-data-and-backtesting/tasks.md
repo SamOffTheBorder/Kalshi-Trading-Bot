@@ -48,6 +48,6 @@
 
 ## 8. First real backtest + gate review
 
-- [ ] 8.1 Run crypto mispricing strategy over full available history with train/test split
-- [ ] 8.2 Record results in the change; propose calibrated go/no-go thresholds (replacing the placeholder Sharpe > 1.0) as a spec amendment
-- [ ] 8.3 Docs: architecture + runbook pages in docs-site for fetching data and running a backtest
+- [x] 8.1 Run crypto mispricing strategy over full available history with train/test split — run #3, 2026-07-15: **gate NOT cleared** (win-rate margin -6.5% vs fee-adjusted breakeven; 25.8% drawdown tripped PAUSE; zero out-of-sample trades). Full analysis in notes.md
+- [ ] 8.2 Record results in the change; propose calibrated go/no-go thresholds — results recorded; threshold calibration BLOCKED on larger archive (37 trades is too small a sample). Archiver must run daily; re-run gate when the window is materially larger
+- [x] 8.3 Docs: architecture + runbook pages in docs-site for fetching data and running a backtest

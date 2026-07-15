@@ -49,6 +49,41 @@ archive**. Consequences:
    exists for completeness runs. Market metadata rows are still archived for every strike.
 3. Spot klines must be fetched before any backtest (`--series --spot` for spot-only).
 
+## §8.1 First real backtest (2026-07-15, run #3) — GATE NOT CLEARED
+
+Window: 2026-07-03 .. 2026-07-15 (~12 days archived), split 2026-07-12, $130, quarter-Kelly,
+5% cap, pessimistic fills. 87,363 evaluations → 37 entries (gates are highly selective).
+
+```
+[train] trades=37 win_rate=59.5% vs breakeven=66.0% (margin -6.5%)
+        net_pnl=+$68.95 (fees $16.47) sharpe=0.48 max_dd=25.8%
+[test]  no trades
+```
+
+**Honest reading — the metrics design did its job:**
+
+1. **Win-rate margin is NEGATIVE (-6.5%).** 59.5% wins sounds good and PnL is +$68.95,
+   but the fee-adjusted breakeven at the average entry price (~63¢) is 66%. The profit
+   came from favorable dollar-weighting of a 37-trade sample, not a validated
+   count-weighted edge. This is exactly the v1 failure signature the side-by-side
+   breakeven display exists to catch — v1 would have called this a win.
+2. **25.8% max drawdown tripped the PAUSE guard mid-run**, and the guard stayed paused
+   into the test window → **zero out-of-sample trades → the gate cannot be evaluated,
+   therefore it is not cleared.** A strategy that hits its own pause threshold in-sample
+   fails the "drawdown within guard tolerance" criterion regardless of PnL.
+3. 37 trades is far too small a sample to calibrate go/no-go thresholds (§8.2's ask).
+
+**Follow-ups before re-running the gate:**
+- Grow the archive (rolling window: earliest ~2026-06-01 upstream; archiver must run daily)
+- Investigate entry concentration: which series/hours produced the 37 entries and the
+  drawdown cluster (signals table has full audit trail, run_id=3)
+- Methodological decision to record in the next run: whether the test segment should
+  start with a fresh guard/bankroll (independent evaluation) or inherit train state
+  (operationally realistic). Current engine inherits; keep, but report guard state at
+  split so a starved test segment is visible rather than silent.
+- Consider whether `min_edge=0.05` + probability bounds need recalibration once the
+  signals audit trail shows the hold-reason distribution across all 87k evaluations.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
