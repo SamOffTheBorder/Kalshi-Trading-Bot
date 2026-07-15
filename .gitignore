@@ -7,6 +7,7 @@ secrets/
 # Data & logs (root-anchored: src/kalshi_bot/data/ is source code)
 /data/
 /logs/
+/logs_archiver.txt
 *.db
 *.sqlite3
 *.csv
