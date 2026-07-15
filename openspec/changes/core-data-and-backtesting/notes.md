@@ -37,6 +37,18 @@ archive**. Consequences:
 - Unauthenticated requests get 429s well below the documented Basic-tier 20/s — client default
   lowered to a conservative rate; backoff handles the rest.
 
+## Engine smoke-run discoveries (2026-07-15)
+
+1. **Hourly markets need 1-minute candles.** An hourly market gets exactly one 60-minute
+   candle, timestamped at the market's close — too late to trade. The engine defaults to
+   1-minute granularity with a 300s evaluation stride (matching a realistic live polling
+   cadence); the archiver now runs `--period 1`.
+2. **Zero-volume strikes skipped at fetch time.** ~183 strike-markets per hourly period,
+   most far-OTM with zero lifetime volume. Fetching their candles is one request each and
+   simulating fills in never-traded markets is fantasy anyway. `--include-zero-volume`
+   exists for completeness runs. Market metadata rows are still archived for every strike.
+3. Spot klines must be fetched before any backtest (`--series --spot` for spot-only).
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have

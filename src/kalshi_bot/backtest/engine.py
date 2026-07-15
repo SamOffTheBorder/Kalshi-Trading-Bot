@@ -73,7 +73,15 @@ class BacktestEngine:
         kelly_fraction: float,
         max_position_pct: float,
         guard: DrawdownGuard,
+        candle_period_minutes: int = 1,
+        eval_stride_s: int = 300,
     ) -> None:
+        """`candle_period_minutes` must be finer than the market lifetime:
+        hourly markets get exactly one 60-minute candle — timestamped at the
+        market's close, when it's too late to trade — so hourly series are
+        only backtestable at 1-minute granularity. `eval_stride_s` throttles
+        how often the same market is re-evaluated (matches the ~minutes-scale
+        polling cadence a live loop would use, and keeps MC cost sane)."""
         self.strategy = strategy
         self.broker = broker
         self.session = session
@@ -81,6 +89,8 @@ class BacktestEngine:
         self.kelly_fraction = kelly_fraction
         self.max_position_pct = max_position_pct
         self.guard = guard
+        self.candle_period_minutes = candle_period_minutes
+        self.eval_stride_s = eval_stride_s
 
     # -- data loading ------------------------------------------------------------
 
@@ -139,7 +149,7 @@ class BacktestEngine:
             select(Candle).where(
                 Candle.end_period_ts >= start_ts,
                 Candle.end_period_ts <= end_ts,
-                Candle.period_minutes == 60,
+                Candle.period_minutes == self.candle_period_minutes,
             )
         ).scalars():
             if candle.market_ticker in markets:
@@ -158,6 +168,7 @@ class BacktestEngine:
         timeline = sorted(set(candles_by_ts) | set(markets_by_close))
         equity_curve: list[tuple[int, float]] = []
         entry_ts_by_market: dict[str, int] = {}
+        last_eval_ts: dict[str, int] = {}
         trade_rows: dict[str, SimulatedTrade] = {}
         evaluated = 0
         entered = 0
@@ -189,6 +200,10 @@ class BacktestEngine:
                 market = markets[candle.market_ticker]
                 if market.close_ts <= ts or market.ticker in entry_ts_by_market:
                     continue
+                last = last_eval_ts.get(market.ticker)
+                if last is not None and ts - last < self.eval_stride_s:
+                    continue
+                last_eval_ts[market.ticker] = ts
                 symbol = SERIES_SYMBOL.get(market.series_ticker)
                 if symbol is None:
                     continue

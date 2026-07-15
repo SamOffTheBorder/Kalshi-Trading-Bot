@@ -52,6 +52,7 @@ def fetch_series(
     *,
     period_minutes: int,
     max_markets: int,
+    skip_zero_volume: bool = True,
 ) -> tuple[int, int]:
     """Archive one series. Returns (markets_processed, candles_inserted)."""
     known_tickers = set(
@@ -79,6 +80,14 @@ def fetch_series(
         if ticker not in known_tickers:
             session.add(KalshiMarket(**row))
             known_tickers.add(ticker)
+
+        # Most strikes per period are far OTM with zero lifetime volume —
+        # candles for markets nobody ever traded are simulation fantasy and
+        # cost one request each. Market metadata is still stored above.
+        never_traded = not raw.get("volume")
+        if skip_zero_volume and never_traded:
+            markets_done += 1
+            continue
 
         if ticker not in candled_tickers:
             raw_candles = client.get_candlesticks(
@@ -143,6 +152,11 @@ def main() -> None:
     parser.add_argument("--series", nargs="*", default=DEFAULT_SERIES)
     parser.add_argument("--period", type=int, default=60, choices=[1, 60, 1440])
     parser.add_argument("--max-markets", type=int, default=0, help="0 = no limit")
+    parser.add_argument(
+        "--include-zero-volume",
+        action="store_true",
+        help="also fetch candles for markets with zero lifetime volume (slow)",
+    )
     parser.add_argument("--spot", action="store_true", help="also fetch daily spot klines")
     parser.add_argument("--report", action="store_true", help="coverage report only, no fetch")
     args = parser.parse_args()
@@ -165,6 +179,7 @@ def main() -> None:
                     s,
                     period_minutes=args.period,
                     max_markets=args.max_markets,
+                    skip_zero_volume=not args.include_zero_volume,
                 )
                 logger.info("{}: done — {} markets, {} new candles", s, markets, candles)
                 print(coverage_report(session, s, args.period).summary())

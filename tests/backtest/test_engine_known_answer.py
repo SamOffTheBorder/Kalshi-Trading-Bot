@@ -161,6 +161,7 @@ async def run_engine(session: Session):
         kelly_fraction=0.25,
         max_position_pct=0.05,
         guard=DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0),
+        candle_period_minutes=60,  # synthetic candles are hourly, mid-market
     )
     return await engine.run(start_ts=BASE, end_ts=END, split_ts=SPLIT)
 
