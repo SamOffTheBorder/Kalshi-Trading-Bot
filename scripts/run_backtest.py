@@ -26,6 +26,7 @@ from kalshi_bot.backtest.engine import BacktestEngine  # noqa: E402
 from kalshi_bot.config.settings import get_settings  # noqa: E402
 from kalshi_bot.execution.backtest_broker import BacktestBroker  # noqa: E402
 from kalshi_bot.risk.drawdown_guard import DrawdownGuard  # noqa: E402
+from kalshi_bot.risk.entry_throttle import EntryThrottle  # noqa: E402
 from kalshi_bot.storage import (  # noqa: E402
     Candle,
     create_all_tables,
@@ -95,6 +96,10 @@ async def main() -> None:
             pause_pct=settings.max_drawdown_pause_pct,
             halt_pct=settings.max_drawdown_halt_pct,
             initial_equity=cash,
+        ),
+        throttle=EntryThrottle(
+            max_entries=settings.max_entries_per_series_window,
+            window_s=int(settings.entry_throttle_window_hours * 3600),
         ),
         candle_period_minutes=1,  # hourly markets are only tradeable at 1-min bars
     )

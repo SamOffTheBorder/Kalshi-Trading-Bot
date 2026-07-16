@@ -31,6 +31,7 @@ from kalshi_bot.backtest.metrics import SegmentMetrics, compute_segment_metrics
 from kalshi_bot.execution.backtest_broker import BacktestBroker, MarketBar, Settlement
 from kalshi_bot.execution.broker_protocol import OrderRequest
 from kalshi_bot.risk.drawdown_guard import DrawdownGuard
+from kalshi_bot.risk.entry_throttle import EntryThrottle
 from kalshi_bot.risk.kelly import size_binary_position
 from kalshi_bot.signals.volatility import estimate_volatility
 from kalshi_bot.storage.models import BacktestRun, Candle, KalshiMarket, SimulatedTrade, SpotCandle
@@ -73,6 +74,7 @@ class BacktestEngine:
         kelly_fraction: float,
         max_position_pct: float,
         guard: DrawdownGuard,
+        throttle: EntryThrottle | None = None,
         candle_period_minutes: int = 1,
         eval_stride_s: int = 300,
     ) -> None:
@@ -89,6 +91,7 @@ class BacktestEngine:
         self.kelly_fraction = kelly_fraction
         self.max_position_pct = max_position_pct
         self.guard = guard
+        self.throttle = throttle
         self.candle_period_minutes = candle_period_minutes
         self.eval_stride_s = eval_stride_s
 
@@ -243,6 +246,8 @@ class BacktestEngine:
                     continue
                 if not self.guard.allows_new_entries():
                     continue
+                if self.throttle is not None and not self.throttle.allows(market.series_ticker, ts):
+                    continue
 
                 p_win = (
                     decision.bs_probability
@@ -278,6 +283,8 @@ class BacktestEngine:
                 if result.status != "filled":
                     continue
                 entered += 1
+                if self.throttle is not None:
+                    self.throttle.record_entry(market.series_ticker, ts)
                 entry_ts_by_market[market.ticker] = ts
                 self.session.flush()
                 trade_rows[market.ticker] = SimulatedTrade(

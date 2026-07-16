@@ -123,6 +123,18 @@ class Settings(BaseSettings):
         description="No new entries closer to expiry than this — near-expiry gamma "
         "noise makes model estimates unreliable.",
     )
+    max_entries_per_series_window: int = Field(
+        default=3,
+        ge=1,
+        description="Episode/cluster guard: max filled entries per series within the "
+        "rolling entry_throttle_window_hours. Backtest run #4 lost to 23 entries "
+        "fading one 15-hour trend; per-trade caps alone don't bound an episode.",
+    )
+    entry_throttle_window_hours: float = Field(
+        default=24.0,
+        gt=0.0,
+        description="Rolling window (hours) over which max_entries_per_series_window is enforced.",
+    )
 
     # --- Drawdown circuit breakers -------------------------------------------
     max_drawdown_pause_pct: float = Field(

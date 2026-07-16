@@ -3,6 +3,7 @@
 import pytest
 
 from kalshi_bot.risk.drawdown_guard import DrawdownGuard, GuardState
+from kalshi_bot.risk.entry_throttle import EntryThrottle
 from kalshi_bot.risk.kelly import binary_kelly_fraction, size_binary_position
 
 # --- Kelly formula ------------------------------------------------------------
@@ -166,3 +167,44 @@ def test_peak_tracks_new_highs():
 def test_threshold_ordering_enforced():
     with pytest.raises(ValueError):
         DrawdownGuard(pause_pct=0.40, halt_pct=0.25, initial_equity=100.0)
+
+
+# --- EntryThrottle (episode/cluster guard) ---------------------------------------
+
+
+def test_throttle_allows_up_to_cap():
+    t = EntryThrottle(max_entries=3, window_s=3600)
+    for i in range(3):
+        assert t.allows("KXBTC", 1000 + i)
+        t.record_entry("KXBTC", 1000 + i)
+    assert not t.allows("KXBTC", 1003)
+
+
+def test_throttle_is_per_series():
+    t = EntryThrottle(max_entries=1, window_s=3600)
+    t.record_entry("KXBTC", 1000)
+    assert not t.allows("KXBTC", 1001)
+    assert t.allows("KXETH", 1001)
+
+
+def test_throttle_window_rolls_off():
+    t = EntryThrottle(max_entries=1, window_s=3600)
+    t.record_entry("KXBTC", 1000)
+    assert not t.allows("KXBTC", 4599)  # 3599s later, still inside window
+    assert t.allows("KXBTC", 4600)  # exactly window_s later, rolled off
+
+
+def test_throttle_counts_only_entries_in_window():
+    t = EntryThrottle(max_entries=2, window_s=100)
+    t.record_entry("KXBTC", 0)
+    t.record_entry("KXBTC", 90)
+    assert not t.allows("KXBTC", 95)
+    assert t.entries_in_window("KXBTC", 150) == 1  # first rolled off
+    assert t.allows("KXBTC", 150)
+
+
+def test_throttle_input_validation():
+    with pytest.raises(ValueError):
+        EntryThrottle(max_entries=0, window_s=3600)
+    with pytest.raises(ValueError):
+        EntryThrottle(max_entries=1, window_s=0)
