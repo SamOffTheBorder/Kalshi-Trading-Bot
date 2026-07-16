@@ -84,6 +84,49 @@ Window: 2026-07-03 .. 2026-07-15 (~12 days archived), split 2026-07-12, $130, qu
 - Consider whether `min_edge=0.05` + probability bounds need recalibration once the
   signals audit trail shows the hold-reason distribution across all 87k evaluations.
 
+## §8.2 Second backtest, wider window (2026-07-16, run #4) — GATE STILL NOT CLEARED, worse result
+
+Window: 2026-05-10 .. 2026-07-16 (67 days, KXBTC+KXBTCD only — KXETH/KXETHD had zero archived
+candles at run time), split 2026-06-29, $130, quarter-Kelly, 5% cap, pessimistic fills.
+991,543 evaluations → 23 entries.
+
+```
+[train] trades=23 win_rate=52.2% vs breakeven=67.9% (margin -15.8%)
+        net_pnl=-$35.63 (fees $2.37) sharpe=-0.78 max_dd=27.4%
+[test]  no trades
+```
+
+**This is a materially worse and more informative result than run #3:**
+
+1. **Win-rate margin widened from -6.5% to -15.8%.** Run #3's near-breakeven-looking PnL was
+   noise from a 37-trade sample; with ~6x more calendar time the same strategy loses money
+   outright (net PnL now negative, Sharpe negative). This is the expected behavior of a larger,
+   more representative sample revealing a real (lack of) edge rather than sampling luck.
+2. **Same failure mode as run #3**: drawdown (27.4%) tripped PAUSE and the test segment again
+   got zero trades — two consecutive runs where the strategy exhausts its own risk budget
+   before ever reaching out-of-sample evaluation. This is now a pattern, not a fluke.
+3. **Entry count dropped from 37 to 23 despite ~6x more data** — the gates (min_edge, BS/MC
+   divergence, probability bounds) are filtering harder over the longer window, and what gets
+   through is losing. Fewer, worse trades on more data is the opposite of what a real edge
+   should look like.
+
+**Conclusion**: `crypto_mispricing` as currently configured does not have a validated edge on
+KXBTC/KXBTCD 1-min data. Per the plan's explicit phase-gate rule, this strategy does NOT
+proceed to paper trading. Before any further gate attempt:
+
+- Pull the run_id=4 signals audit trail and characterize the 23 trades: which hour-of-day/
+  strike-distance/vol-regime they cluster in, and whether the divergence guard or probability
+  bounds are systematically letting through a biased subset.
+- Re-examine `min_edge` (currently 0.05) and `max_model_divergence` (0.06) — both were picked
+  as reasonable defaults, not calibrated against data. This run is exactly the calibration
+  data that was missing before.
+- Once KXETH/KXETHD have real coverage, re-run including them — a strategy failing on BTC
+  alone doesn't rule out ETH behaving differently, though the prior is now for consistent
+  underperformance given the shared strategy logic and pricing model.
+- Consider whether the fill model's pessimism (worst-of-bar price) is appropately calibrated
+  vs. what live execution would actually achieve — but do NOT loosen this to manufacture a
+  pass; the whole point of pessimistic-by-default is that a strategy needs to survive it.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
