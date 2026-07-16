@@ -288,6 +288,7 @@ class BacktestEngine:
                         yes_bid_close=candle.yes_bid_close,
                         yes_ask_high=candle.yes_ask_high,
                         yes_ask_close=candle.yes_ask_close,
+                        volume=candle.volume,
                     )
                 )
                 side = "yes" if decision.action == Action.BUY_YES else "no"

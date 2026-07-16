@@ -162,3 +162,53 @@ def test_settle_without_position_is_noop():
     broker = make_broker()
     broker.settle_market("KXBTCD-T-1", "yes", TS)
     assert broker.settlements == []
+
+
+# --- liquidity cap ------------------------------------------------------------
+
+
+async def test_fill_capped_at_fraction_of_bar_volume():
+    broker = BacktestBroker(starting_cash_usd=1000.0, liquidity_cap_frac=0.25)
+    broker.set_current_bar(make_bar(volume=40))
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=100)
+    )
+    assert result.status == "filled"
+    assert result.quantity == 10  # 25% of 40, not the requested 100
+
+
+async def test_order_within_cap_fills_in_full():
+    broker = BacktestBroker(starting_cash_usd=1000.0, liquidity_cap_frac=0.25)
+    broker.set_current_bar(make_bar(volume=40))
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=5)
+    )
+    assert result.status == "filled"
+    assert result.quantity == 5
+
+
+async def test_zero_volume_bar_rejects():
+    broker = BacktestBroker(starting_cash_usd=1000.0)
+    broker.set_current_bar(make_bar(volume=0))
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10)
+    )
+    assert result.status == "rejected"
+    assert result.reject_reason == "insufficient_liquidity"
+
+
+async def test_unknown_volume_is_uncapped():
+    broker = BacktestBroker(starting_cash_usd=1000.0)
+    broker.set_current_bar(make_bar(volume=None))
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=100)
+    )
+    assert result.status == "filled"
+    assert result.quantity == 100
+
+
+def test_liquidity_cap_frac_validation():
+    with pytest.raises(ValueError):
+        BacktestBroker(starting_cash_usd=100.0, liquidity_cap_frac=0.0)
+    with pytest.raises(ValueError):
+        BacktestBroker(starting_cash_usd=100.0, liquidity_cap_frac=1.5)

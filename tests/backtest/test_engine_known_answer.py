@@ -101,7 +101,7 @@ def seed_synthetic_history(session: Session) -> None:
                 yes_bid_close=38,
                 yes_ask_high=42,
                 yes_ask_close=40,
-                volume=10,
+                volume=1_000,  # deep enough that the liquidity cap never binds here
                 open_interest=10,
             ),
             Candle(
@@ -113,7 +113,7 @@ def seed_synthetic_history(session: Session) -> None:
                 yes_bid_close=43,
                 yes_ask_high=45,
                 yes_ask_close=45,
-                volume=10,
+                volume=1_000,  # deep enough that the liquidity cap never binds here
                 open_interest=10,
             ),
         ]

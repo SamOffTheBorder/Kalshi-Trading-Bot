@@ -39,6 +39,7 @@ class MarketBar:
     yes_bid_close: int | None
     yes_ask_high: int | None
     yes_ask_close: int | None
+    volume: int | None = None  # contracts traded in this bar; None = unknown (no cap)
 
 
 @dataclass
@@ -66,9 +67,23 @@ class Settlement:
 class BacktestBroker:
     """Implements BrokerAdapter against replayed historical bars."""
 
-    def __init__(self, *, starting_cash_usd: float, fill_mode: FillMode = "pessimistic") -> None:
+    def __init__(
+        self,
+        *,
+        starting_cash_usd: float,
+        fill_mode: FillMode = "pessimistic",
+        liquidity_cap_frac: float = 0.25,
+    ) -> None:
+        """`liquidity_cap_frac`: max fraction of a bar's traded volume one order
+        may fill (partial fill beyond it, reject if the cap rounds to zero).
+        Run #7 exposed why: Kelly compounding grew fills past entire markets'
+        LIFETIME volume, producing fantasy PnL. Applies only when the bar
+        carries a volume figure."""
+        if not 0 < liquidity_cap_frac <= 1:
+            raise ValueError("liquidity_cap_frac must be in (0, 1]")
         self._cash = starting_cash_usd
         self._fill_mode: FillMode = fill_mode
+        self._liquidity_cap_frac = liquidity_cap_frac
         self._positions: dict[str, _OpenPosition] = {}
         self._current_bars: dict[str, MarketBar] = {}
         self._order_ids = itertools.count(1)
@@ -169,14 +184,21 @@ class BacktestBroker:
         if order.limit_price_cents is not None and price_cents > order.limit_price_cents:
             return reject("limit_exceeded")
 
-        cost = (price_cents / 100) * order.quantity
+        quantity = order.quantity
+        if bar.volume is not None:
+            max_fillable = int(bar.volume * self._liquidity_cap_frac)
+            if max_fillable < 1:
+                return reject("insufficient_liquidity")
+            quantity = min(quantity, max_fillable)
+
+        cost = (price_cents / 100) * quantity
         if cost > self._cash:
             return reject("insufficient_funds")
 
         self._cash -= cost
         self._positions[order.market_ticker] = _OpenPosition(
             side=order.side,
-            quantity=order.quantity,
+            quantity=quantity,
             entry_price_cents=price_cents,
             entry_ts=bar.ts,
         )
@@ -185,7 +207,7 @@ class BacktestBroker:
             market_ticker=order.market_ticker,
             side=order.side,
             status="filled",
-            quantity=order.quantity,
+            quantity=quantity,
             fill_price_cents=price_cents,
             filled_at_ts=bar.ts,
         )
