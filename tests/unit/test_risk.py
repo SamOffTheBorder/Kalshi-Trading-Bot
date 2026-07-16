@@ -254,3 +254,18 @@ def test_window_peak_tracks_running_max_within_window():
     g.update(120.0, ts=200)
     assert g.peak_equity == 150.0
     assert g.drawdown == pytest.approx(1 - 120.0 / 150.0)
+
+
+def test_slow_bleed_halts_via_all_time_reference():
+    """Run #6's gap: each 10% step never trips a trailing-window halt, but the
+    cumulative all-time drawdown must."""
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0, peak_window_s=100)
+    equity, ts = 100.0, 0
+    state = GuardState.NORMAL
+    while equity > 50.0:
+        ts += 200  # each step starts a fresh trailing window (old peak aged out)
+        equity *= 0.90
+        state = g.update(equity, ts=ts)
+        assert g.drawdown <= 0.11  # trailing reference never sees more than one step
+    assert state == GuardState.HALTED  # cumulative 40%+ caught by the all-time reference
+    assert g.drawdown_all_time >= 0.40

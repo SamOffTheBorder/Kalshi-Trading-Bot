@@ -5,13 +5,18 @@ halt threshold. PAUSED recovers to NORMAL when drawdown shrinks back below
 the pause line. HALTED is sticky: only an explicit human-initiated reset
 clears it (wired to EmergencyControl.resume in a later change).
 
-Drawdown is measured against a TRAILING-WINDOW peak, not the all-time peak.
-Backtest runs #3-#5 exposed why: in a settle-to-flat system, a paused book
-has constant equity, so drawdown from an all-time peak can never shrink —
-PAUSED became permanently sticky and starved every out-of-sample segment.
-With a trailing peak, an old peak ages out of the window and the guard
-re-arms after at most `peak_window_s` of no new losses. HALTED remains
-all-time-sticky regardless.
+The two thresholds use DIFFERENT reference peaks, each for a reason found in
+backtest runs #3-#6:
+
+- PAUSE measures against a TRAILING-WINDOW peak. Runs #3-#5: in a
+  settle-to-flat system, a paused book has constant equity, so drawdown from
+  an all-time peak can never shrink — PAUSED was permanently sticky and
+  starved every out-of-sample segment. With a trailing peak, an old peak
+  ages out and the guard re-arms after at most `peak_window_s`.
+- HALT measures against the ALL-TIME peak. Run #6: a slow bleed (42.5% total
+  drawdown) never tripped the 40% halt because each window forgave the last —
+  a trailing reference structurally cannot see cumulative ruin. HALTED is
+  also sticky: only an explicit human reset clears it.
 
 Thresholds arrive via constructor from Settings — the single definition.
 v1 shipped three contradictory copies of these numbers; this class is the
@@ -54,15 +59,22 @@ class DrawdownGuard:
         self.halt_pct = halt_pct
         self.peak_window_s = peak_window_s
         self.peak_equity = initial_equity
+        self.all_time_peak = initial_equity
         self.state = GuardState.NORMAL
         self._drawdown = 0.0
+        self._drawdown_all_time = 0.0
         # monotonic-decreasing deque of (ts, equity); front is the window max
         self._peaks: deque[tuple[int, float]] = deque()
 
     @property
     def drawdown(self) -> float:
-        """Most recent drawdown-from-peak, for dashboards/status."""
+        """Most recent drawdown from the (possibly trailing) pause-reference peak."""
         return self._drawdown
+
+    @property
+    def drawdown_all_time(self) -> float:
+        """Most recent drawdown from the all-time peak (the HALT reference)."""
+        return self._drawdown_all_time
 
     def _window_peak(self, current_equity: float, ts: int) -> float:
         while self._peaks and self._peaks[-1][1] <= current_equity:
@@ -81,14 +93,21 @@ class DrawdownGuard:
             raise ValueError("guard has a trailing peak window; update() requires ts")
         else:
             self.peak_equity = self._window_peak(current_equity, ts)
+        self.all_time_peak = max(self.all_time_peak, current_equity)
         dd = 1.0 - (current_equity / self.peak_equity)
+        dd_all_time = 1.0 - (current_equity / self.all_time_peak)
         self._drawdown = dd
+        self._drawdown_all_time = dd_all_time
 
         if self.state == GuardState.HALTED:
             return self.state  # sticky until explicit reset
 
-        if dd >= self.halt_pct:
-            logger.warning("DrawdownGuard HALT: drawdown {:.1%} >= {:.1%}", dd, self.halt_pct)
+        if dd_all_time >= self.halt_pct:
+            logger.warning(
+                "DrawdownGuard HALT: all-time drawdown {:.1%} >= {:.1%}",
+                dd_all_time,
+                self.halt_pct,
+            )
             self.state = GuardState.HALTED
         elif dd >= self.pause_pct:
             if self.state != GuardState.PAUSED:
