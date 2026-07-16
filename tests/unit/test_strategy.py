@@ -154,3 +154,34 @@ def test_hold_decisions_are_persisted_with_reason():
     stored_context = json.loads(row.context)
     assert stored_context["spot"] == 100_000.0
     assert stored_context["vol_source"] == "historical_30d"
+
+
+# --- trend-regime gate ------------------------------------------------------------
+
+
+def test_strong_trend_holds_regardless_of_edge():
+    """|z| beyond the cap -> trend_regime HOLD, before any pricing runs."""
+    strategy = make_strategy()
+    for z in (2.0, -2.0):
+        decision = strategy.evaluate(make_context(trend_zscore=z))
+        assert decision.action == Action.HOLD
+        assert decision.hold_reason == "trend_regime"
+
+
+def test_mild_trend_does_not_gate():
+    strategy = make_strategy()
+    decision = strategy.evaluate(make_context(trend_zscore=0.5))
+    assert decision.hold_reason != "trend_regime"
+
+
+def test_unknown_trend_does_not_gate():
+    """trend_zscore=None (insufficient history) -> gate is skipped, not tripped."""
+    strategy = make_strategy()
+    decision = strategy.evaluate(make_context(trend_zscore=None))
+    assert decision.hold_reason != "trend_regime"
+
+
+def test_trend_threshold_is_configurable():
+    tight = make_strategy(max_trend_zscore=0.3)
+    decision = tight.evaluate(make_context(trend_zscore=0.5))
+    assert decision.hold_reason == "trend_regime"

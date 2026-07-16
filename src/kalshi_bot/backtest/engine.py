@@ -20,6 +20,7 @@ are held to settlement in this phase).
 from __future__ import annotations
 
 import bisect
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -77,6 +78,7 @@ class BacktestEngine:
         throttle: EntryThrottle | None = None,
         candle_period_minutes: int = 1,
         eval_stride_s: int = 300,
+        trend_lookback_s: int = 86_400,
     ) -> None:
         """`candle_period_minutes` must be finer than the market lifetime:
         hourly markets get exactly one 60-minute candle — timestamped at the
@@ -94,6 +96,7 @@ class BacktestEngine:
         self.throttle = throttle
         self.candle_period_minutes = candle_period_minutes
         self.eval_stride_s = eval_stride_s
+        self.trend_lookback_s = trend_lookback_s
 
     # -- data loading ------------------------------------------------------------
 
@@ -222,6 +225,16 @@ class BacktestEngine:
                 except ValueError:
                     continue
 
+                # trend z-score: realized log-return over the lookback window,
+                # normalized by the zero-drift model's expected scale (sigma*sqrt(t))
+                trend_z: float | None = None
+                spot_then = self._latest_before(hourly_ts, hourly_close, ts - self.trend_lookback_s)
+                if spot_then is not None and spot_then > 0 and vol.vol_annual > 0:
+                    lookback_years = self.trend_lookback_s / (365 * 24 * 3600)
+                    trend_z = math.log(spot / spot_then) / (
+                        vol.vol_annual * math.sqrt(lookback_years)
+                    )
+
                 context = StrategyContext(
                     market_ticker=market.ticker,
                     series_ticker=market.series_ticker,
@@ -235,6 +248,7 @@ class BacktestEngine:
                     spot=spot,
                     vol_annual=vol.vol_annual,
                     vol_source=vol.source,
+                    trend_zscore=trend_z,
                 )
                 decision = self.strategy.evaluate(context)
                 evaluated += 1

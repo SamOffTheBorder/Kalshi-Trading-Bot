@@ -82,6 +82,7 @@ async def main() -> None:
             min_entry_probability=settings.min_entry_probability,
             max_entry_probability=settings.max_entry_probability,
             min_minutes_to_expiry=settings.min_minutes_to_expiry,
+            max_trend_zscore=settings.max_trend_zscore,
             mc_seed=1337,  # deterministic runs are comparable runs
         )
     )
@@ -103,6 +104,7 @@ async def main() -> None:
             window_s=int(settings.entry_throttle_window_hours * 3600),
         ),
         candle_period_minutes=1,  # hourly markets are only tradeable at 1-min bars
+        trend_lookback_s=int(settings.trend_lookback_hours * 3600),
     )
 
     print(f"Backtesting {fmt(start_ts)} .. {fmt(end_ts)} (split {fmt(split_ts)}), ${cash:.2f}")

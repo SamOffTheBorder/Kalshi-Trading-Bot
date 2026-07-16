@@ -123,6 +123,18 @@ class Settings(BaseSettings):
         description="No new entries closer to expiry than this — near-expiry gamma "
         "noise makes model estimates unreliable.",
     )
+    max_trend_zscore: float = Field(
+        default=1.5,
+        gt=0.0,
+        description="Trend-regime gate: HOLD when |realized log-return over the lookback| "
+        "exceeds this many model sigmas (vol*sqrt(t)). The zero-drift BS/MC pricer fades "
+        "trends it cannot see — run #4's losses all came from one such episode.",
+    )
+    trend_lookback_hours: float = Field(
+        default=24.0,
+        gt=0.0,
+        description="Lookback window (hours) for the trend-regime z-score.",
+    )
     max_entries_per_series_window: int = Field(
         default=3,
         ge=1,

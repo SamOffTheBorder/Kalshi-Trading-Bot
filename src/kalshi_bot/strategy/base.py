@@ -44,6 +44,11 @@ class StrategyContext:
     vol_annual: float
     vol_source: str
 
+    # trend regime: signed z-score of the realized log-return over the caller's
+    # lookback window, in units of what the zero-drift model expects (sigma*sqrt(t)).
+    # None = not computable (insufficient spot history) -> no trend gate applied.
+    trend_zscore: float | None = None
+
     # room for later signal inputs (sentiment, forecasts) without breaking the protocol
     extras: dict[str, float] = field(default_factory=dict)
 

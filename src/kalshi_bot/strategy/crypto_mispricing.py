@@ -37,6 +37,7 @@ class CryptoMispricingConfig:
     min_entry_probability: float = 0.30
     max_entry_probability: float = 0.80
     min_minutes_to_expiry: float = 10.0
+    max_trend_zscore: float = 1.5
     mc_paths: int = 20_000
     mc_seed: int | None = None  # set for deterministic backtests
 
@@ -75,6 +76,11 @@ class CryptoMispricingStrategy:
             return hold("no_quotes")
         if not (0 < context.yes_ask_cents < 100) or not (0 <= context.yes_bid_cents < 100):
             return hold("degenerate_quotes")
+        # Zero-drift BS/MC cannot price a trending market — run #4's audit showed
+        # every loss came from repeatedly fading one directional move. When recent
+        # realized drift exceeds what the model's own vol expects, stand down.
+        if context.trend_zscore is not None and abs(context.trend_zscore) > cfg.max_trend_zscore:
+            return hold("trend_regime")
 
         try:
             bs = contract_probability(
