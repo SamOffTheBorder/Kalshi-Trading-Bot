@@ -252,6 +252,72 @@ directional moves it cannot see). Options from here, in recommended order:
    verdict) to the plan's other strategy families (weather/econ), where pricing may be
    less efficient than crypto.
 
+## §8.2 Run #7 with trend-regime gate (2026-07-16) — filter works; fill model exposed
+
+Added the trend filter (engine computes `trend_zscore` = 24h log-return / vol·√t; strategy
+HOLDs when |z| > 1.5, reason `trend_regime` — fired 128,422 times). Same window/params.
+988,792 evaluations → 185 entries.
+
+```
+[train] trades=111 win_rate=56.8% vs breakeven=56.2% (margin +0.5%)
+        net_pnl=+$1,290.53  sharpe=0.70 max_dd=53.6%
+[test]  trades=74  win_rate=47.3% vs breakeven=48.0% (margin -0.7%)
+        net_pnl=+$9,270.32  sharpe=0.69 max_dd=25.3%   final equity $10,690.84
+```
+
+**Two findings, one good, one disqualifying:**
+
+1. **The trend hypothesis is confirmed.** OOS count-weighted margin improved -14.0% → -0.7%,
+   train margin went positive (+0.5%) for the first time in five runs. Standing down during
+   directional moves removes most of the losing population. The strategy is now roughly
+   breakeven-quality per trade, rather than clearly losing.
+2. **The dollar PnL ($130 → $10,690) is fantasy — the fill model had no liquidity limit.**
+   Audit of the biggest trades: 7,320 contracts filled at 1¢ (+$6,739); 5,730 contracts into
+   a market whose LIFETIME volume was 5,481; 29,747 contracts into a 54k-lifetime market.
+   Kelly compounding scaled position sizes past what the markets could absorb, and two
+   cheap-contract moonshots produced nearly all the profit. Fixed same date:
+   `BacktestBroker` now caps fills at `liquidity_cap_frac` (default 25%) of the entry bar's
+   traded volume (partial fill above, reject at zero-volume bars). Run #8 = same config
+   under capped fills.
+
+Gate still NOT cleared on run #7's own terms regardless of the artifact: OOS Sharpe 0.69
+< 1.0, OOS margin -0.7% is not "meaningfully above breakeven", train max_dd 53.6%.
+
+## §8.2 Run #8: trend gate + liquidity-capped fills (2026-07-16) — first positive OOS margin
+
+Same config as run #7 under the honest fill model (25%-of-bar-volume cap). 990,185
+evaluations → 180 entries.
+
+```
+[train] trades=116 win_rate=59.5% vs breakeven=53.8% (margin +5.7%)
+        net_pnl=+$116.51 (fees $38.20) sharpe=0.52 max_dd=38.2%
+[test]  trades=64  win_rate=60.9% vs breakeven=50.8% (margin +10.2%)
+        net_pnl=+$173.47 (fees $40.24) sharpe=0.72 max_dd=29.1%   final equity $419.98
+```
+
+Structure is honest for the first time: max position $172 / 174 contracts, biggest test
+trade +$47.15 of +$173.47 total (no moonshot domination), test entries spread across 12
+days at ≤6/day. Both segments show positive count-weighted margins — the first run where
+the win rate beats fee-adjusted breakeven at all, let alone out-of-sample.
+
+Notable: tightening fills IMPROVED per-trade quality (OOS margin -0.7% → +10.2%). Zero-
+and thin-volume bars are where stale/phantom quotes live; refusing to trade meaningfully
+into them removed fantasy edges. Tightening-improves-results is the direction that builds
+confidence, not suspicion.
+
+**Gate ruling: STILL NOT CLEARED, on two grounds:**
+1. OOS Sharpe 0.72 < 1.0 bar. Margin +10.2% on n=64 is ~1.7σ — suggestive, not conclusive.
+   Train max_dd 38.2% sits above the 25% pause line (guard paused repeatedly) even if
+   under the 40% halt.
+2. **The test window is no longer clean.** Runs #4→#8 iterated against the same split;
+   each fix was chosen after seeing test-segment outcomes. The +10.2% must be treated as
+   in-sample-adjacent until validated on data that did not exist when the config was
+   frozen. Config is hereby FROZEN as of run #8 (trend z 1.5/24h, throttle 3/24h,
+   liquidity cap 25%, all defaults in Settings); the archiver keeps extending the window —
+   re-run in ~1-2 weeks on genuinely unseen days (and on KXETH/KXETHD once covered) with
+   NO further tuning. If the margin holds there, take the calibration question (Sharpe
+   bar, drawdown thresholds) to the gate review; if it doesn't, park the strategy.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
