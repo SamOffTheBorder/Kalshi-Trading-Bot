@@ -208,3 +208,49 @@ def test_throttle_input_validation():
         EntryThrottle(max_entries=0, window_s=3600)
     with pytest.raises(ValueError):
         EntryThrottle(max_entries=1, window_s=0)
+
+
+# --- DrawdownGuard trailing-window peak -------------------------------------------
+
+
+def test_alltime_pause_is_sticky_on_flat_book():
+    """The failure mode runs #3-#5 hit: without a window, a paused flat book
+    (constant equity) can never shrink its drawdown and stays paused forever."""
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0)
+    g.update(140.0)
+    g.update(100.0)  # 28.6% drawdown -> PAUSED
+    assert g.state == GuardState.PAUSED
+    for _ in range(100):  # equity flat forever
+        g.update(100.0)
+    assert g.state == GuardState.PAUSED
+
+
+def test_window_peak_reams_after_old_peak_ages_out():
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0, peak_window_s=3600)
+    g.update(140.0, ts=1000)
+    assert g.update(100.0, ts=1500) == GuardState.PAUSED  # dd 28.6% vs windowed peak 140
+    assert g.update(100.0, ts=4000) == GuardState.PAUSED  # peak 140 still in window
+    assert g.update(100.0, ts=4600) == GuardState.NORMAL  # 140 aged out; peak=100, dd=0
+    assert g.drawdown == pytest.approx(0.0)
+
+
+def test_window_halt_stays_sticky_even_after_ageout():
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0, peak_window_s=3600)
+    g.update(200.0, ts=1000)
+    assert g.update(100.0, ts=1500) == GuardState.HALTED  # 50% drawdown
+    assert g.update(100.0, ts=99_000) == GuardState.HALTED  # ageout does not clear HALT
+
+
+def test_window_guard_requires_ts():
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0, peak_window_s=3600)
+    with pytest.raises(ValueError):
+        g.update(100.0)
+
+
+def test_window_peak_tracks_running_max_within_window():
+    g = DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=100.0, peak_window_s=10_000)
+    g.update(110.0, ts=0)
+    g.update(150.0, ts=100)  # new max
+    g.update(120.0, ts=200)
+    assert g.peak_equity == 150.0
+    assert g.drawdown == pytest.approx(1 - 120.0 / 150.0)

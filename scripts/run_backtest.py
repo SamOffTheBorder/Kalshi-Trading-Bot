@@ -96,6 +96,7 @@ async def main() -> None:
             pause_pct=settings.max_drawdown_pause_pct,
             halt_pct=settings.max_drawdown_halt_pct,
             initial_equity=cash,
+            peak_window_s=int(settings.drawdown_peak_window_days * 86_400),
         ),
         throttle=EntryThrottle(
             max_entries=settings.max_entries_per_series_window,

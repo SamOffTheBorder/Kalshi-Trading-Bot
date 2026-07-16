@@ -151,6 +151,14 @@ class Settings(BaseSettings):
         description="Drawdown from peak (per broker) triggering full halt + close-all "
         "via EmergencyControl. Must be > max_drawdown_pause_pct.",
     )
+    drawdown_peak_window_days: float = Field(
+        default=7.0,
+        gt=0.0,
+        description="Trailing window (days) for the drawdown guard's reference peak. "
+        "An all-time peak makes PAUSE permanently sticky in a settle-to-flat book "
+        "(equity can't move while paused) — backtest runs #3-#5 starved every "
+        "out-of-sample segment this way. HALT stays sticky regardless.",
+    )
 
     # --- AI layer -------------------------------------------------------------
     openrouter_api_key: SecretStr | None = Field(

@@ -196,7 +196,7 @@ class BacktestEngine:
             open_positions = await self.broker.get_open_positions()
             equity = cash + sum(p.quantity * p.avg_entry_price_cents / 100 for p in open_positions)
             equity_curve.append((ts, equity))
-            self.guard.update(equity)
+            self.guard.update(equity, ts=ts)
 
             # 3. evaluate open markets with a candle this hour
             for candle in candles_by_ts.get(ts, []):
