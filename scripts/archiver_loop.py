@@ -19,7 +19,24 @@ import time
 from datetime import datetime
 
 PYTHON = sys.executable
-SERIES = ["KXBTC", "KXBTCD", "KXETH", "KXETHD"]
+# Weather series first: dirt-cheap to archive (~6 markets/day each, EVERY strike
+# trades — spike 2026-07-16: KXHIGHLAX 5.5M contracts/wk, KXHIGHNY 1.4M) and they
+# are the designated pivot family if crypto validation fails. Crypto after.
+SERIES = [
+    "KXHIGHNY",
+    "KXHIGHLAX",
+    "KXHIGHMIA",
+    "KXHIGHCHI",
+    "KXHIGHAUS",
+    "KXHIGHDEN",
+    "KXHIGHPHIL",
+    "KXLOWTOKC",
+    "KXLOWTDC",
+    "KXBTC",
+    "KXBTCD",
+    "KXETH",
+    "KXETHD",
+]
 
 
 def run(cmd: list[str]) -> None:

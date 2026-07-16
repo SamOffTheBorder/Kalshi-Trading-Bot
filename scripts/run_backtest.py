@@ -47,6 +47,14 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=0, help="restrict to most recent N days")
     parser.add_argument("--test-frac", type=float, default=0.25)
+    parser.add_argument(
+        "--split-date",
+        type=str,
+        default=None,
+        help="pin the train/test split at an ISO date (UTC), e.g. 2026-07-16. "
+        "Overrides --test-frac. Use for frozen-config validation: everything "
+        "after the freeze date is genuinely unseen test data.",
+    )
     parser.add_argument("--cash", type=float, default=None, help="default: Kalshi bankroll share")
     parser.add_argument("--fill-mode", choices=["pessimistic", "midpoint"], default="pessimistic")
     args = parser.parse_args()
@@ -69,7 +77,15 @@ async def main() -> None:
     if end_ts - start_ts < 4 * 3600:
         print(f"Window too thin ({fmt(start_ts)}..{fmt(end_ts)}); archive more history first.")
         return
-    split_ts = int(end_ts - (end_ts - start_ts) * args.test_frac)
+    if args.split_date is not None:
+        split_ts = int(
+            datetime.strptime(args.split_date, "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
+        )
+        if not start_ts < split_ts < end_ts:
+            print(f"--split-date {args.split_date} is outside the data window; aborting.")
+            return
+    else:
+        split_ts = int(end_ts - (end_ts - start_ts) * args.test_frac)
 
     cash = args.cash
     if cash is None:

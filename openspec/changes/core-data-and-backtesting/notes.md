@@ -318,6 +318,35 @@ confidence, not suspicion.
    NO further tuning. If the margin holds there, take the calibration question (Sharpe
    bar, drawdown thresholds) to the gate review; if it doesn't, park the strategy.
 
+## Weather/econ series spike (2026-07-16) — pivot insurance
+
+User direction: Webull deferred indefinitely; Kalshi-only focus. Probed the public series
+catalog (`/series?category=`): 288 Climate/Weather, 620 Economics, 733 Financials series.
+Volume probe over the trailing week for the daily-temperature family:
+
+| Series | Markets/wk | Volume/wk | Nonzero strikes |
+|---|---|---|---|
+| KXHIGHLAX | 42 | 5,546,502 | 42/42 |
+| KXHIGHNY | 42 | 1,448,115 | 42/42 |
+| KXHIGHMIA | 42 | 1,002,089 | 42/42 |
+| KXHIGHCHI | 42 | 814,549 | 42/42 |
+| KXHIGHDEN | 42 | 377,591 | 42/42 |
+| KXHIGHPHIL | 42 | 367,786 | 42/42 |
+| KXHIGHAUS | 42 | 343,757 | 42/42 |
+| KXLOWTOKC | 42 | 143,791 | 42/42 |
+| KXLOWTDC | 42 | 68,324 | 42/42 |
+
+**Every strike trades** (vs ~18% for crypto hourlies), volumes are large, and the market
+structure (6 strikes/day, NOAA-forecastable underlying) matches the plan's
+weather-mispricing family. KXLOWMIA/KXRAINDNYC/KXTRUFAIDP settled nothing this week —
+skipped. All nine live series added to `archiver_loop.py` (weather first — ~6
+markets/day each, trivially cheap vs crypto's ~576) so history accrues from today inside
+the ~6-week upstream retention window. If crypto validation (§8.4) fails, the weather
+proposal starts with real archived data instead of a cold start.
+
+Also added `run_backtest.py --split-date` so the §8.4 validation run pins the split at
+the freeze date (2026-07-16): everything after it is genuinely unseen test data.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
