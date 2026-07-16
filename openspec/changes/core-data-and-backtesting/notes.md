@@ -170,6 +170,88 @@ into it. Implications:
 4. Re-run the backtest only after (1) is in place, so the next result reflects diversified
    entries rather than one episode's outcome.
 
+## §8.2 Run #5 with EntryThrottle (2026-07-16) — cluster cap works; guard defect exposed
+
+Implemented `risk/entry_throttle.py` (max 3 filled entries per series per rolling 24h,
+`max_entries_per_series_window` / `entry_throttle_window_hours`) and re-ran the same window
+(2026-05-10 .. 2026-07-16, split 2026-06-29, $130, pessimistic fills). 991,311 evaluations →
+48 entries.
+
+```
+[train] trades=48 win_rate=52.1% vs breakeven=53.2% (margin -1.1%)
+        net_pnl=+$98.24 (fees $23.53) sharpe=0.32 max_dd=26.8%
+[test]  no trades   ← third consecutive starved test segment
+```
+
+**The throttle did what it was built to do**: entries now spread across 16 distinct days
+(2026-05-16 .. 05-31, max 3/day) instead of 23 in one 15-hour episode. Win-rate margin
+improved -15.8% → -1.1%, net PnL flipped positive, and average entry cost dropped 63¢ → 51¢
+(breakeven 67.9% → 53.2%). One clustered episode no longer dominates the sample.
+
+**But the test segment starved again, and this time the root cause is nailed down** (audit
+of the equity curve + signals table, run_id=5):
+
+- Equity peaked at $311.73 (~05-29/30 intraday), then the 05-30/31 losses took it to $228.24
+  — a 26.8% drawdown that tripped PAUSE.
+- **All-time-peak PAUSE is permanently sticky in a settle-to-flat book, by construction**:
+  paused ⇒ no entries ⇒ book settles flat ⇒ equity constant ⇒ drawdown-from-all-time-peak
+  can never shrink ⇒ paused forever. There is no code path back to NORMAL.
+- The cost was measurable: the signals table shows **~1,000 BUY candidates/day from 06-24
+  onward — including the entire test window — every one blocked by the stuck guard.**
+  (22,929 BUY signals total out of 991,311 evaluations, 2.3% — the strategy gates are
+  selective; `insufficient_edge` accounts for 76% of holds.)
+- This same mechanism, not strategy behavior, is why runs #3 and #4 also had zero
+  out-of-sample trades.
+
+**Fix (same date): trailing-window peak.** `DrawdownGuard` now measures drawdown against
+the max equity in a trailing window (`drawdown_peak_window_days`, default 7; monotonic-deque
+sliding max). An old peak ages out, so PAUSE re-arms after at most one window of flat equity.
+HALT remains all-time-sticky pending explicit human reset. `peak_window_s=None` preserves
+the old semantics for callers without timestamps. **This is a risk-semantics change worth
+explicit review before Phase 2** — recorded here per the plan's "recalibrate the guard
+against backtest output" clause.
+
+## §8.2 Run #6 with trailing-peak guard (2026-07-16) — first real OOS segment: GATE FAILED DECISIVELY
+
+Same window/params as run #5, guard now re-arms (7-day trailing peak). 988,529 evaluations →
+128 entries; the guard paused and recovered repeatedly instead of dying on 05-31.
+
+```
+[train] trades=100 win_rate=53.0% vs breakeven=53.3% (margin -0.3%)
+        net_pnl=+$657.69 (fees $160.97) sharpe=0.62 max_dd=42.5%
+[test]  trades=28  win_rate=32.1% vs breakeven=46.2% (margin -14.0%)
+        net_pnl=-$238.88 (fees $43.33)  sharpe=-0.27 max_dd=42.9%
+```
+
+**This is the run the whole apparatus was built for — the first out-of-sample segment with
+trades, and it fails everything:**
+
+1. **OOS win rate 32.1% vs 46.2% breakeven (margin -14.0%), net -$238.88.** The test trades
+   are exactly what we wanted structurally — spread over 7 days, both series, both sides,
+   throttle-capped — a genuinely diversified sample, and it still loses. Worse: a single
+   +$384.16 win (2026-07-09) masks the rest; the other 27 test trades lost -$623 combined.
+2. **Train +$657.69 is Kelly-compounded dollar-weighting, not edge**: count-weighted margin
+   is -0.3%, and the weekly PnL is two hot weeks (+$948 in weeks 22-23) surrounded by
+   givebacks (-$389 in weeks 24-25). v1 would have shipped this. The gate says no.
+3. **Trade count rose 48 → 128 with the guard fixed** — runs #3-#5's "selective" entry counts
+   were partly an artifact of the stuck guard, not just strategy selectivity.
+4. **Trailing-peak side effect flagged**: segment max_dd hit 42.5%/42.9% — beyond the 40%
+   HALT line — but HALT never fired, because drawdown-from-*trailing*-peak stayed below it
+   during slow bleeds. The trailing window fixes PAUSE re-arm but also softens HALT.
+   Design question for review: HALT should probably be measured against a longer/absolute
+   reference (e.g., initial bankroll or all-time peak) rather than the same 7-day window.
+
+**Conclusion: `crypto_mispricing` (zero-drift BS/MC, current gates) has NO out-of-sample
+edge. Per the plan's phase-gate rule it does not proceed to paper trading in this form.**
+The remaining untested structural hypothesis is trend/drift-awareness (the model fades
+directional moves it cannot see). Options from here, in recommended order:
+1. Add a realized-drift/trend filter (HOLD when recent drift contradicts the zero-drift
+   assumption), re-run — the last cheap, falsifiable iteration on this strategy.
+2. If OOS margin is still negative with the filter: park crypto mispricing and take the
+   framework (which now demonstrably works end-to-end: archive → backtest → honest OOS
+   verdict) to the plan's other strategy families (weather/econ), where pricing may be
+   less efficient than crypto.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
