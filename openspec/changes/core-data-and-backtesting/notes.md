@@ -127,6 +127,49 @@ proceed to paper trading. Before any further gate attempt:
   vs. what live execution would actually achieve — but do NOT loosen this to manufacture a
   pass; the whole point of pessimistic-by-default is that a strategy needs to survive it.
 
+## §8.2 audit trail finding — root cause identified (2026-07-16)
+
+Pulled all 23 run_id=4 trades (market_ticker, side, entry price, timing, outcome). **The
+"23 trades over 67 days" framing is misleading — all 23 fired within a single ~15-hour window
+on 2026-05-16, all on KXBTC (none KXBTCD), 21/23 on the NO side, nearly all at closely-spaced
+`B78xxx` strikes** (a tight band around $78,000). This is not a diversified sample of the
+strategy's behavior across two months — it's one clustered episode.
+
+**Reading**: BTC was evidently trending toward/through the $78k level that day. The strategy
+kept independently re-evaluating adjacent hourly range markets straddling that level, and its
+pricing model kept computing a NO edge that the market disagreed with — and the market was
+right more often than not (12 losses vs. 11 wins by count, but losses skew larger: -$68.14
+total losses vs. +$32.51 total wins). This looks like a trending/directional regime the
+digital-option model (which assumes the current spot + static vol, not directional drift) is
+structurally not equipped to price well — repeatedly fading a move instead of recognizing one.
+
+**This reframes the whole result**: the gate isn't failing because of scattered bad luck across
+two months: it's failing because on the *one* day with enough volatility to trip the strategy's
+edge threshold at all, it walked into a single adverse trending episode and keeps re-entering
+into it. Implications:
+- The archive's 67-day window has real trading activity on essentially one day — coverage is
+  wide in calendar time but narrow in "days the strategy actually found an edge." More archived
+  history won't fix this; it'll just add more mostly-idle days unless another volatile episode
+  is captured.
+- A same-day, same-strike-band, same-side entry cluster is exactly what a **per-day or
+  per-directional-move position cap** would limit — the strategy currently has no such guard;
+  only the portfolio-level position/Kelly caps apply per-trade, not per-episode.
+- Before touching `min_edge`/divergence thresholds, the higher-priority question is whether the
+  model needs a drift/momentum-awareness component (or a trend-filter HOLD) — an edge that only
+  shows up during trends and then loses to the trend is a specification gap, not a threshold
+  miscalibration.
+
+**Revised next steps** (supersedes the prior "recalibrate thresholds" framing):
+1. Add a same-day/same-underlying entry cap to `crypto_mispricing` or `risk/` (e.g., max N
+   entries per series per rolling window) so one clustered episode can't dominate a backtest
+   or, later, a live run.
+2. Investigate whether a simple trend filter (e.g., recent realized drift vs. the model's
+   zero-drift assumption) should gate entries or adjust the probability estimate.
+3. Once KXETH/KXETHD have coverage, check whether they show the same single-day-clustering
+   pattern — if so, this is a structural strategy gap, not a BTC-specific fluke.
+4. Re-run the backtest only after (1) is in place, so the next result reflects diversified
+   entries rather than one episode's outcome.
+
 ## Design open-question resolutions
 
 - "Which crypto series have deep-enough candlestick history?" → All four target series have
