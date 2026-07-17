@@ -82,7 +82,18 @@ def one_pass() -> None:
     # still makes progress on the series that need it most before circling
     # back to KXBTC's much larger backlog.
     for series in SERIES:
-        run([PYTHON, "scripts/fetch_historical.py", "--series", series, "--period", "1"])
+        run(
+            [
+                PYTHON,
+                "scripts/fetch_historical.py",
+                "--series",
+                series,
+                "--period",
+                "1",
+                "--time-budget",
+                "180",  # a new series can't dominate a pass; resumes next pass
+            ]
+        )
 
     run([PYTHON, "scripts/fetch_historical.py", "--series", "--spot"])
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -53,8 +54,20 @@ def fetch_series(
     period_minutes: int,
     max_markets: int,
     skip_zero_volume: bool = True,
+    time_budget_s: float = 0,
 ) -> tuple[int, int]:
-    """Archive one series. Returns (markets_processed, candles_inserted)."""
+    """Archive one series. Returns (markets_processed, candles_inserted).
+
+    `time_budget_s` (0 = unlimited) caps how long one call spends on this
+    series before returning early — a brand-new series with no candled
+    history yet can page through thousands of settled markets and dominate
+    an entire archiver pass (KXBTC did this to KXBTCD/KXETH/KXETHD early in
+    the project; the fix then was manually reordering series, this is the
+    structural version). Progress is never lost: markets/candles already
+    fetched are committed, and the next pass resumes via the known-ticker
+    skip below.
+    """
+    started = time.monotonic()
     known_tickers = set(
         session.execute(
             select(KalshiMarket.ticker).where(KalshiMarket.series_ticker == series_ticker)
@@ -73,6 +86,13 @@ def fetch_series(
     candles_inserted = 0
     for raw in client.iter_markets(series_ticker=series_ticker, status="settled"):
         if max_markets and markets_done >= max_markets:
+            break
+        if time_budget_s and (time.monotonic() - started) >= time_budget_s:
+            logger.info(
+                "{}: time budget ({:.0f}s) reached, resuming next pass",
+                series_ticker,
+                time_budget_s,
+            )
             break
         row = parse_market(raw, series_ticker=series_ticker)
         ticker = row["ticker"]
@@ -154,6 +174,13 @@ def main() -> None:
     parser.add_argument("--period", type=int, default=60, choices=[1, 60, 1440])
     parser.add_argument("--max-markets", type=int, default=0, help="0 = no limit")
     parser.add_argument(
+        "--time-budget",
+        type=float,
+        default=0,
+        help="seconds to spend per series before moving on (0 = no limit); "
+        "resumes next run via the known-ticker skip",
+    )
+    parser.add_argument(
         "--include-zero-volume",
         action="store_true",
         help="also fetch candles for markets with zero lifetime volume (slow)",
@@ -181,6 +208,7 @@ def main() -> None:
                     period_minutes=args.period,
                     max_markets=args.max_markets,
                     skip_zero_volume=not args.include_zero_volume,
+                    time_budget_s=args.time_budget,
                 )
                 logger.info("{}: done — {} markets, {} new candles", s, markets, candles)
                 print(coverage_report(session, s, args.period).summary())
