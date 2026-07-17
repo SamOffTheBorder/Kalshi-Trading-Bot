@@ -1,9 +1,13 @@
 """Persistent archiver loop — run this in its own visible window.
 
-Repeatedly archives all four crypto series at 1-minute granularity, plus spot
+Repeatedly archives crypto + weather series at 1-minute granularity, plus spot
 klines, then sleeps. Designed to run for hours/days in a console window you can
 glance at (progress prints) and close anytime (Ctrl+C or just close the window
 — nothing is lost; every fetch is resumable).
+
+Every pass is also logged to logs/archiver_loop.log (rotating, kept outside the
+console window) so a silent death leaves evidence instead of a mystery — the
+console window has died silently more than once with nothing to diagnose why.
 
 Usage:
   uv run python scripts/archiver_loop.py                  # default: every 30 min
@@ -13,12 +17,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import subprocess
 import sys
 import time
-from datetime import datetime
+import traceback
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 PYTHON = sys.executable
+LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "archiver_loop.log"
 # Weather series first: dirt-cheap to archive (~6 markets/day each, EVERY strike
 # trades — spike 2026-07-16: KXHIGHLAX 5.5M contracts/wk, KXHIGHNY 1.4M) and they
 # are the designated pivot family if crypto validation fails. Crypto after.
@@ -38,15 +46,37 @@ SERIES = [
     "KXETHD",
 ]
 
+logger = logging.getLogger("archiver_loop")
+
+
+def setup_logging() -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    logger.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=5_000_000, backupCount=3)
+    file_handler.setFormatter(fmt)
+    logger.addHandler(file_handler)
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(fmt)
+    logger.addHandler(console_handler)
+
 
 def run(cmd: list[str]) -> None:
-    print(f"\n$ {' '.join(cmd)}")
-    subprocess.run(cmd, check=False)
+    logger.info("$ %s", " ".join(cmd))
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.stdout:
+        logger.info(result.stdout.rstrip())
+    if result.returncode != 0:
+        stderr_tail = (result.stderr or "").rstrip()[-2000:]
+        logger.warning("exit code %d: %s", result.returncode, stderr_tail)
 
 
-def one_pass(interval_s: int) -> None:
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{'=' * 70}\n[{stamp}] Archive pass starting\n{'=' * 70}")
+def one_pass() -> None:
+    logger.info("=" * 70)
+    logger.info("Archive pass starting")
+    logger.info("=" * 70)
 
     # Series with the least coverage go first, so a slow/rate-limited run
     # still makes progress on the series that need it most before circling
@@ -56,11 +86,12 @@ def one_pass(interval_s: int) -> None:
 
     run([PYTHON, "scripts/fetch_historical.py", "--series", "--spot"])
 
-    print(f"\n{'=' * 70}\nCoverage after this pass:\n{'=' * 70}")
+    logger.info("=" * 70)
+    logger.info("Coverage after this pass:")
+    logger.info("=" * 70)
     run([PYTHON, "scripts/fetch_historical.py", "--report", "--period", "1"])
 
-    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n[{stamp}] Pass complete. Sleeping {interval_s}s (Ctrl+C or close window to stop)...")
+    logger.info("Pass complete.")
 
 
 def main() -> None:
@@ -70,13 +101,29 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print("Kalshi archiver loop starting. Close this window anytime to stop — safe, resumable.")
-    try:
-        while True:
-            one_pass(args.interval)
+    setup_logging()
+    logger.info(
+        "Kalshi archiver loop starting (log: %s). Close this window anytime to stop — "
+        "safe, resumable.",
+        LOG_PATH,
+    )
+    while True:
+        try:
+            one_pass()
+        except KeyboardInterrupt:
+            logger.info("Stopped.")
+            return
+        except Exception:
+            # A crash inside one_pass must never silently kill the whole loop —
+            # that's exactly the failure mode this loop exists to avoid. Log the
+            # full traceback and keep going after the normal interval.
+            logger.error("Archive pass crashed:\n%s", traceback.format_exc())
+        logger.info("Sleeping %ds (Ctrl+C or close window to stop)...", args.interval)
+        try:
             time.sleep(args.interval)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+        except KeyboardInterrupt:
+            logger.info("Stopped.")
+            return
 
 
 if __name__ == "__main__":
