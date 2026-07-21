@@ -1,47 +1,58 @@
 ---
 sidebar_position: 1
+slug: /intro
 ---
 
-# Tutorial Intro
+# Kalshi Trading Bot
 
-Let's discover **Docusaurus in less than 5 minutes**.
+A backtest-first trading system for Kalshi event contracts, being rebuilt from scratch
+after a v1 attempt that went live on an unvalidated strategy. These docs are the living
+record of the rebuild: what was decided, what's been validated, what hasn't, and what's
+next.
 
-## Getting Started
+## Why a rebuild
 
-Get started by **creating a new site**.
+The previous project (`Kalshi-Trading-Bot-OLD`) never worked, for reasons that turned out
+to be structural rather than incidental:
 
-Or **try Docusaurus immediately** with **[docusaurus.new](https://docusaurus.new)**.
+- **It went live without ever backtesting.** `src/backtest/` was an empty stub for the
+  entire life of the project. The only validation loop was risking real money forward.
+  The last commit message documented a "~50-51% win rate" — which, after Kalshi's 7% fee
+  on net winnings, is a **net loser**. There was no cheap way to have caught that before
+  it was live.
+- **The final committed state didn't run.** `bot.py` and `src/ai/gemini_worker.py` both
+  contained unresolved git merge-conflict markers. Only 3 commits existed across the
+  project's whole life — most iteration happened uncommitted, and a broken merge was
+  never cleaned up.
+- **Configuration drifted in ways that mattered.** `.env.example` documented the wrong
+  auth method entirely; the drawdown guard's docstring, its code, and `.env.example` gave
+  three different threshold values; the paper bankroll disagreed between two files; a
+  fully-built AI veto module was silently dead code.
+- **There was no way to intervene remotely.** Notifications were `winsound.Beep()`.
+  Control was an interactive console window — nothing reachable if you weren't
+  physically at the machine.
+- **Test coverage was near zero** (12 tests, only covering pricing math) on a system
+  moving real money.
 
-### What you'll need
+None of this was a strategy problem — the actual pricing math (Black-Scholes, Kelly
+sizing) was correct and is being carried forward. It was an engineering-discipline
+problem. Every structural rule in this rebuild exists to close one of these gaps
+specifically — see [Project scope & decisions](./project-scope.md) for the full list.
 
-- [Node.js](https://nodejs.org/en/download/) version 20.0 or above:
-  - When installing Node.js, you are recommended to check all checkboxes related to dependencies.
+## Where to go from here
 
-## Generate a new site
+| If you want to know... | Read |
+|---|---|
+| What's in scope, what's deferred, and what was decided up front | [Project scope & decisions](./project-scope.md) |
+| How the system is structured and why | [Architecture overview](./architecture/overview.md) |
+| Whether the current strategy actually has an edge | [Validation history](./status/validation-history.md) |
+| What happens next, and what's gated behind what | [Roadmap](./roadmap.md) |
+| How to actually run something | [Runbooks](./runbooks/fetch-historical-data.md) |
 
-Generate a new Docusaurus site using the **classic template**.
+## The one rule that matters most
 
-The classic template will automatically be added to your project after you run the command:
-
-```bash
-npm init docusaurus@latest my-website classic
-```
-
-You can type this command into Command Prompt, Powershell, Terminal, or any other integrated terminal of your code editor.
-
-The command also installs all necessary dependencies you need to run Docusaurus.
-
-## Start your site
-
-Run the development server:
-
-```bash
-cd my-website
-npm run start
-```
-
-The `cd` command changes the directory you're working with. In order to work with your newly created Docusaurus site, you'll need to navigate the terminal there.
-
-The `npm run start` command builds your website locally and serves it through a development server, ready for you to view at http://localhost:3000/.
-
-Open `docs/intro.md` (this page) and edit some lines: the site **reloads automatically** and displays your changes.
+**No strategy touches paper trading until it clears a fee-adjusted bar on genuinely
+out-of-sample historical data, and no strategy touches live money until it also
+forward-validates in paper mode.** This is enforced by the backtest engine itself (the
+train/test split is a parameter the engine requires, not a convention), not left to
+operator discipline. It is the single biggest structural difference from v1.
