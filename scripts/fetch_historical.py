@@ -1,11 +1,14 @@
 """Archive Kalshi settled markets + candlesticks (and spot klines) locally.
 
 The public API is a ~6-week rolling window (see the change's notes.md), so
-this script IS the deep archive: run it regularly (cron / Task Scheduler) and
-the local DB accumulates history the API forgets.
+this script IS the deep archive: run it manually, periodically, whenever you're
+at the machine, and the local DB accumulates history the API forgets. By
+explicit decision (2026-09-04) nothing here runs unattended (no cron/Task
+Scheduler) — a missed check-in can lose data once it rolls off the window; see
+openspec/changes/v2-perps-scalping-and-frontend/proposal.md O1.
 
 Usage:
-  uv run python scripts/fetch_historical.py                   # all four series, settled, 60m
+  uv run python scripts/fetch_historical.py                   # all BTC series, settled, 60m
   uv run python scripts/fetch_historical.py --series KXBTC --max-markets 200
   uv run python scripts/fetch_historical.py --spot            # also pull daily spot klines
   uv run python scripts/fetch_historical.py --report          # coverage report only
@@ -42,8 +45,8 @@ from kalshi_bot.storage import (  # noqa: E402
     get_session_factory,
 )
 
-DEFAULT_SERIES = ["KXBTC", "KXBTCD", "KXETH", "KXETHD"]
-SPOT_SYMBOLS = ["BTC-USD", "ETH-USD"]
+DEFAULT_SERIES = ["KXBTC", "KXBTCD", "KXBTC15M"]
+SPOT_SYMBOLS = ["BTC-USD"]
 
 
 def fetch_series(

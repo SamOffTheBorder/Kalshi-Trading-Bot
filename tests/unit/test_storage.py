@@ -11,6 +11,7 @@ from kalshi_bot.storage.models import (
     Candle,
     SignalRecord,
     SimulatedTrade,
+    VetoVerdictRecord,
 )
 
 
@@ -98,6 +99,52 @@ def test_signal_records_hold_with_reason(session):
     assert row.action == "HOLD"
     assert row.hold_reason == "bs_mc_divergence"
     assert row.fee_adjusted_edge < 0
+
+
+def test_veto_verdict_record_roundtrip(session):
+    """tasks.md 7.6: every AI veto verdict persists, approved or not."""
+    signal = SignalRecord(
+        evaluated_at_ts=1_752_534_000,
+        mode="paper",
+        strategy_name="trend_scalp",
+        market_ticker="KXBTC15M-26SEP0512",
+        action="BUY_YES",
+    )
+    session.add(signal)
+    session.flush()
+
+    session.add(
+        VetoVerdictRecord(
+            signal_id=signal.id,
+            model="qwen3:14b",
+            approved=False,
+            confidence=0.4,
+            reason="edge too thin given trend strength",
+            raw_response='{"approved": false, "confidence": 0.4}',
+            latency_ms=850,
+        )
+    )
+    session.commit()
+    row = session.execute(select(VetoVerdictRecord)).scalar_one()
+    assert row.signal_id == signal.id
+    assert row.approved is False
+    assert row.latency_ms == 850
+
+
+def test_veto_verdict_record_allows_null_signal_id(session):
+    """A verdict computed standalone (e.g. a benchmark run, tasks.md 7.5)
+    without a linked signal must still be persistable."""
+    session.add(
+        VetoVerdictRecord(
+            signal_id=None,
+            model="qwen3:14b",
+            approved=True,
+            reason="ok",
+        )
+    )
+    session.commit()
+    row = session.execute(select(VetoVerdictRecord)).scalar_one()
+    assert row.signal_id is None
 
 
 def test_backtest_run_with_trades_roundtrip(session):

@@ -1,0 +1,120 @@
+{% extends "_base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Trading control</h2>
+  <p class="muted">
+    {% if paper_trading %}Paper trading mode.{% else %}LIVE trading mode.{% endif %}
+    No live-trading process exists yet (§4-§7 not built) — Start records operator
+    intent only; there is nothing live to arm.
+  </p>
+  {% include "_control_status.html" %}
+  <div class="controls">
+    <button hx-post="/control/arm" hx-target="#control-status" hx-swap="outerHTML" class="btn btn-start">
+      Start
+    </button>
+    <button hx-post="/control/kill" hx-target="#control-status" hx-swap="outerHTML" class="btn btn-kill">
+      KILL SWITCH
+    </button>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Latest backtest run</h2>
+  {% if run %}
+    <p><strong>{{ run.strategy_name }}</strong> — run #{{ run.id }}, {{ run.status }}</p>
+    <p class="muted">{{ run.created_at }}</p>
+    <div class="grid-2">
+      <div>
+        <h3>Train metrics</h3>
+        <pre>{{ run.metrics_train | tojson(indent=2) if run.metrics_train else "—" }}</pre>
+      </div>
+      <div>
+        <h3>Test (out-of-sample) metrics</h3>
+        <pre>{{ run.metrics_test | tojson(indent=2) if run.metrics_test else "—" }}</pre>
+      </div>
+    </div>
+  {% else %}
+    <p class="muted">No backtest runs yet. Run <code>scripts/run_backtest.py</code>.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Equity curve (reconstructed from settled trades)</h2>
+  {% if equity and equity|length > 1 %}
+    <table class="compact">
+      <thead><tr><th>Step</th><th>Equity (USD)</th></tr></thead>
+      <tbody>
+      {% for point in equity %}
+        <tr><td>{{ loop.index0 }}</td><td>${{ "%.2f"|format(point.equity_usd) }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No settled trades yet for this run.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Recent decisions (including HOLDs)</h2>
+  {% if signals %}
+    <table>
+      <thead>
+        <tr><th>Time</th><th>Market</th><th>Action</th><th>Edge</th><th>Confidence</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+      {% for s in signals %}
+        <tr class="{{ 'row-hold' if s.action == 'HOLD' else 'row-trade' }}">
+          <td>{{ s.evaluated_at_ts }}</td>
+          <td>{{ s.market_ticker }}</td>
+          <td>{{ s.action }}</td>
+          <td>{{ "%.3f"|format(s.fee_adjusted_edge) if s.fee_adjusted_edge is not none else "—" }}</td>
+          <td>{{ "%.2f"|format(s.confidence) if s.confidence is not none else "—" }}</td>
+          <td>{{ s.hold_reason or "—" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No signals recorded yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Live positions / orders / brackets / funding / liquidation distance</h2>
+  <p class="placeholder">
+    Not available yet — these require the authenticated Kalshi client (§4),
+    risk layer (§5), and strategies (§6) which have not been built. This panel
+    is wired and will populate once those exist; it is not faking data.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>AI commentary</h2>
+  <p class="placeholder">
+    Not available yet — the AI layer (§7) has not been built.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>BTC data coverage</h2>
+  {% if coverage is none %}
+    <p class="muted">Computing coverage over the full candle history (first load only, ~1-2 min)&hellip; refresh shortly.</p>
+  {% else %}
+    <table class="compact">
+      <thead><tr><th>Series</th><th>Candles</th><th>Periods</th><th>First</th><th>Last</th><th>Gaps</th></tr></thead>
+      <tbody>
+      {% for c in coverage %}
+        <tr>
+          <td>{{ c.series_ticker }}</td>
+          <td>{{ c.total_candles }}</td>
+          <td>{{ c.distinct_periods }}</td>
+          <td>{{ c.first_dt }}</td>
+          <td>{{ c.last_dt }}</td>
+          <td>{{ c.gaps|length }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}

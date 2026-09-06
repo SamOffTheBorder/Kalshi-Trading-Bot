@@ -1,16 +1,21 @@
 """Crypto mispricing strategy: fair value vs. market price on Kalshi
 threshold/range contracts.
 
+**Parked, v2** (proposal.md "Removed Capabilities"): the zero-drift BS/MC
+pricer does not have a demonstrated directional edge on BTC. Code stays for
+backtest comparison only — not in the live path.
+
 Successor to v1's aggregator with its verified-correct core preserved:
 Black-Scholes digital pricing as the anchor, Monte Carlo as a disagreement
 guard, and — critically — the fee subtracted from edge BEFORE any gate.
 v1 went live on a raw edge that evaporated after fees; that failure mode is
 structurally excluded here.
 
-Edge definition (per contract dollar):
-    EV_yes = p * (1 - c) * (1 - fee_rate) - (1 - p) * c
-where p = model win probability, c = entry price in dollars. Kalshi's fee is
-7% of net winnings, charged only on wins.
+Edge definition (per contract dollar), corrected fee model (v2 —
+see signals/fees.py): Kalshi's fee is charged ONCE, AT ENTRY, win or lose
+— not a cut of net winnings at settlement.
+    EV_yes = p * (1 - c) - (1 - p) * c - fee(c)  =  p - c - fee(c)
+where p = model win probability, c = entry price in dollars.
 """
 
 from __future__ import annotations
@@ -18,16 +23,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from kalshi_bot.signals.black_scholes import contract_probability
+from kalshi_bot.signals.fees import TAKER_FEE_COEFFICIENT, entry_fee_rate_at_price
 from kalshi_bot.signals.monte_carlo import terminal_spot_probability
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext
 
-KALSHI_FEE_RATE = 0.07
+KALSHI_FEE_RATE = TAKER_FEE_COEFFICIENT  # re-exported for backward compat
 
 
 def fee_adjusted_ev(p_win: float, cost_dollars: float, fee_rate: float = KALSHI_FEE_RATE) -> float:
-    """Expected value per contract, fee on net winnings, in dollars."""
+    """Expected value per contract, fee charged at entry win or lose, in dollars."""
     gross_win = 1.0 - cost_dollars
-    return p_win * gross_win * (1.0 - fee_rate) - (1.0 - p_win) * cost_dollars
+    fee = entry_fee_rate_at_price(cost_dollars, coefficient=fee_rate)
+    return p_win * gross_win - (1.0 - p_win) * cost_dollars - fee
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,13 @@ class CryptoMispricingStrategy:
             )
 
         confidence = min(1.0, ev / (2 * cfg.min_edge))
+        # Entry band in price terms: the contract price IS the win probability
+        # for whichever side is being bought (YES price = P(yes); NO price =
+        # 1 - P(yes) = P(no)), so the same [min, max]_entry_probability bounds
+        # apply directly to price, on either side. The engine checks the
+        # ACTUAL FILL against this band — see backtest-engine spec ("entry
+        # gates evaluated against the actual fill") and base.Decision's
+        # min/max_entry_price_cents docstring.
         return Decision(
             action=action,
             market_ticker=context.market_ticker,
@@ -154,4 +168,6 @@ class CryptoMispricingStrategy:
             mc_probability=mc,
             raw_edge=raw,
             fee_adjusted_edge=ev,
+            min_entry_price_cents=round(cfg.min_entry_probability * 100),
+            max_entry_price_cents=round(cfg.max_entry_probability * 100),
         )

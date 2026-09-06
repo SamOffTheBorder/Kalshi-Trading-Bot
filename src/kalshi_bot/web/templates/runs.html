@@ -1,0 +1,28 @@
+{% extends "_base.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Backtest runs</h2>
+  {% if runs %}
+    <table>
+      <thead><tr><th>ID</th><th>Strategy</th><th>Created</th><th>Status</th><th>Test Sharpe</th></tr></thead>
+      <tbody>
+      {% for run in runs %}
+        <tr>
+          <td>{{ run.id }}</td>
+          <td>{{ run.strategy_name }}</td>
+          <td>{{ run.created_at }}</td>
+          <td>{{ run.status }}</td>
+          <td>
+            {% if run.metrics_test and run.metrics_test.sharpe is defined %}
+              {{ "%.2f"|format(run.metrics_test.sharpe) }}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No backtest runs recorded yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,4 +1,4 @@
-"""BacktestBroker: pessimistic fills per side, fee at settlement, rejections."""
+"""BacktestBroker: pessimistic fills per side, fee at entry, rejections."""
 
 import pytest
 
@@ -58,9 +58,11 @@ async def test_midpoint_mode_fills_between_quotes():
 
 
 async def test_cash_reduced_by_cost():
+    """10 contracts @ 47c: stake $4.70, entry fee = ceil(0.07*0.47*0.53*10*100)/100
+    = ceil(17.437)/100 = $0.18, charged at entry regardless of outcome."""
     broker = make_broker(cash=100.0)
     await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10))
-    assert await broker.get_account_balance() == pytest.approx(100.0 - 4.70)
+    assert await broker.get_account_balance() == pytest.approx(100.0 - 4.70 - 0.18)
 
 
 # --- rejections ---------------------------------------------------------------
@@ -110,10 +112,11 @@ async def test_unquoted_side_rejected():
 # --- settlement & fees -----------------------------------------------------------
 
 
-async def test_winning_settlement_applies_fee():
-    """Spec scenario: YES settles in the money -> PnL = gross - 7% fee.
+async def test_winning_settlement_charges_entry_fee_not_settlement_fee():
+    """Spec scenario: fee is charged AT ENTRY, win or lose — never at settlement.
 
-    10 contracts at 47c: cost $4.70. Win -> gross = $5.30, fee = $0.371.
+    10 contracts at 47c: stake $4.70, entry fee $0.18 (see test_cash_reduced_by_cost).
+    Win -> gross = (1-0.47)*10 = $5.30; net = gross - entry_fee = $5.12.
     """
     broker = make_broker(cash=100.0)
     await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10))
@@ -122,22 +125,25 @@ async def test_winning_settlement_applies_fee():
     s = broker.settlements[0]
     assert s.won is True
     assert s.gross_pnl_usd == pytest.approx(5.30)
-    assert s.fee_usd == pytest.approx(0.371)
-    assert s.net_pnl_usd == pytest.approx(4.929)
-    # cash: 100 - 4.70 + (10 - 0.371) = 104.929
-    assert await broker.get_account_balance() == pytest.approx(104.929)
+    assert s.fee_usd == pytest.approx(0.18)  # the entry fee, not a settlement cut
+    assert s.net_pnl_usd == pytest.approx(5.12)
+    # cash: 100 - 4.70 (stake) - 0.18 (entry fee) + 10 (payout on win) = 105.12
+    assert await broker.get_account_balance() == pytest.approx(105.12)
 
 
-async def test_losing_settlement_no_fee():
+async def test_losing_settlement_still_charged_the_entry_fee():
+    """The fee already left the account at entry — settlement charges nothing
+    further, but the fee already paid still shows up in net PnL on a loss."""
     broker = make_broker(cash=100.0)
     await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10))
     broker.settle_market("KXBTCD-T-1", "no", TS + 3600)
 
     s = broker.settlements[0]
     assert s.won is False
-    assert s.fee_usd == 0.0
-    assert s.net_pnl_usd == pytest.approx(-4.70)
-    assert await broker.get_account_balance() == pytest.approx(95.30)
+    assert s.fee_usd == pytest.approx(0.18)  # same fee as the winning case — paid regardless
+    assert s.net_pnl_usd == pytest.approx(-4.70 - 0.18)
+    # cash: 100 - 4.70 (stake) - 0.18 (entry fee), nothing returned on a loss
+    assert await broker.get_account_balance() == pytest.approx(95.12)
 
 
 async def test_no_side_settlement():
@@ -162,6 +168,77 @@ def test_settle_without_position_is_noop():
     broker = make_broker()
     broker.settle_market("KXBTCD-T-1", "yes", TS)
     assert broker.settlements == []
+
+
+# --- early close (fixed-R stop/target exits, tasks.md 6.1/6.2/8.1) -----------
+
+
+async def test_close_position_early_yes_side_target_hit():
+    broker = make_broker(cash=100.0)
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10)
+    )
+    assert result.fill_price_cents == 47
+    cash_after_entry = await broker.get_account_balance()
+
+    settlement = broker.close_position_early("KXBTCD-T-1", 60, TS + 300)
+    assert settlement is not None
+    assert settlement.won is True
+    assert settlement.gross_pnl_usd == pytest.approx((0.60 - 0.47) * 10)
+    assert await broker.get_account_balance() == pytest.approx(cash_after_entry + 0.60 * 10)
+
+
+async def test_close_position_early_yes_side_stop_hit():
+    broker = make_broker(cash=100.0)
+    await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10))
+    settlement = broker.close_position_early("KXBTCD-T-1", 30, TS + 300)
+    assert settlement is not None
+    assert settlement.won is False
+    assert settlement.gross_pnl_usd == pytest.approx((0.30 - 0.47) * 10)
+
+
+async def test_close_position_early_no_side_target_hit():
+    broker = make_broker(cash=100.0)
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="no", quantity=10)
+    )
+    entry_price = result.fill_price_cents
+    assert entry_price is not None
+    # A NO position profits when the contract price FALLS (exit < entry).
+    settlement = broker.close_position_early("KXBTCD-T-1", entry_price - 10, TS + 300)
+    assert settlement is not None
+    assert settlement.won is True
+
+
+async def test_close_position_early_removes_the_position():
+    broker = make_broker()
+    await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=1))
+    broker.close_position_early("KXBTCD-T-1", 60, TS + 300)
+    assert await broker.get_open_positions() == []
+
+
+async def test_close_position_early_charges_no_additional_fee():
+    broker = make_broker(cash=100.0)
+    await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10))
+    settlement = broker.close_position_early("KXBTCD-T-1", 60, TS + 300)
+    assert settlement is not None
+    # fee_usd carries the ENTRY fee (already paid) forward for accounting,
+    # not a second fee — net_pnl_usd = gross - that same entry fee.
+    assert settlement.net_pnl_usd == pytest.approx(settlement.gross_pnl_usd - settlement.fee_usd)
+
+
+def test_close_position_early_without_position_is_noop():
+    broker = make_broker()
+    assert broker.close_position_early("KXBTCD-T-1", 50, TS) is None
+    assert broker.settlements == []
+
+
+async def test_close_position_early_appends_to_settlements():
+    broker = make_broker()
+    await broker.place_order(OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=1))
+    broker.close_position_early("KXBTCD-T-1", 60, TS + 300)
+    assert len(broker.settlements) == 1
+    assert broker.settlements[0].settled_ts == TS + 300
 
 
 # --- liquidity cap ------------------------------------------------------------
@@ -212,3 +289,120 @@ def test_liquidity_cap_frac_validation():
         BacktestBroker(starting_cash_usd=100.0, liquidity_cap_frac=0.0)
     with pytest.raises(ValueError):
         BacktestBroker(starting_cash_usd=100.0, liquidity_cap_frac=1.5)
+
+
+# --- maker/taker execution style (task 3.4) --------------------------------------
+
+
+def make_maker_bar(**overrides) -> MarketBar:
+    """A bar with the extra high/low fields a resting order needs to prove
+    it was touched: yes_ask_low=43 means the ask traded down to 43 at some
+    point (a YES buy resting at 44 would have been crossed); yes_bid_high=58
+    means the bid traded up to 58 (a NO buy resting at 44, i.e. 100-44=56,
+    would have been crossed once the bid reached 56+)."""
+    defaults = dict(
+        market_ticker="KXBTCD-T-1",
+        ts=TS,
+        yes_bid_low=42,
+        yes_bid_close=44,
+        yes_ask_high=47,
+        yes_ask_close=46,
+        yes_ask_low=43,
+        yes_bid_high=58,
+    )
+    defaults.update(overrides)
+    return MarketBar(**defaults)
+
+
+async def test_maker_yes_order_fills_at_own_limit_when_touched():
+    """YES buy resting at 44c: ask traded down to 43c (below 44), so the
+    resting order was crossed. Fills AT the limit price, not at 43c."""
+    broker = BacktestBroker(starting_cash_usd=100.0)
+    broker.set_current_bar(make_maker_bar())
+    result = await broker.place_order(
+        OrderRequest(
+            market_ticker="KXBTCD-T-1",
+            side="yes",
+            quantity=10,
+            limit_price_cents=44,
+            execution_style="maker",
+        )
+    )
+    assert result.status == "filled"
+    assert result.fill_price_cents == 44
+
+
+async def test_maker_yes_order_rejected_when_not_touched():
+    """YES buy resting at 40c: the ask never traded that low (yes_ask_low=43)
+    — no counterparty ever crossed it, so the order never fills."""
+    broker = BacktestBroker(starting_cash_usd=100.0)
+    broker.set_current_bar(make_maker_bar())
+    result = await broker.place_order(
+        OrderRequest(
+            market_ticker="KXBTCD-T-1",
+            side="yes",
+            quantity=10,
+            limit_price_cents=40,
+            execution_style="maker",
+        )
+    )
+    assert result.status == "rejected"
+    assert result.reject_reason == "resting_order_not_touched"
+
+
+async def test_maker_no_order_fills_at_own_limit_when_touched():
+    """NO buy resting at 44c means crossing at yes_bid >= 100-44=56; the bid
+    traded up to 58, so it was touched."""
+    broker = BacktestBroker(starting_cash_usd=100.0)
+    broker.set_current_bar(make_maker_bar())
+    result = await broker.place_order(
+        OrderRequest(
+            market_ticker="KXBTCD-T-1",
+            side="no",
+            quantity=10,
+            limit_price_cents=44,
+            execution_style="maker",
+        )
+    )
+    assert result.status == "filled"
+    assert result.fill_price_cents == 44
+
+
+async def test_maker_order_requires_limit_price():
+    broker = BacktestBroker(starting_cash_usd=100.0)
+    broker.set_current_bar(make_maker_bar())
+    result = await broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10, execution_style="maker")
+    )
+    assert result.status == "rejected"
+    assert result.reject_reason == "maker_requires_limit_price"
+
+
+async def test_maker_fee_is_quarter_of_taker_for_same_fill():
+    """The whole point of maker execution: ~4x cheaper fee for the same
+    fill price. 44c x 10 contracts: taker fee $0.18, maker fee $0.05."""
+    maker_broker = BacktestBroker(starting_cash_usd=100.0)
+    maker_broker.set_current_bar(make_maker_bar())
+    maker_result = await maker_broker.place_order(
+        OrderRequest(
+            market_ticker="KXBTCD-T-1",
+            side="yes",
+            quantity=10,
+            limit_price_cents=44,
+            execution_style="maker",
+        )
+    )
+    assert maker_result.status == "filled"
+    maker_cash = await maker_broker.get_account_balance()
+    # stake $4.40 + maker fee $0.05
+    assert maker_cash == pytest.approx(100.0 - 4.40 - 0.05)
+
+    taker_broker = BacktestBroker(starting_cash_usd=100.0)
+    taker_broker.set_current_bar(make_bar(yes_ask_high=44))  # taker fills at 44c too
+    taker_result = await taker_broker.place_order(
+        OrderRequest(market_ticker="KXBTCD-T-1", side="yes", quantity=10)
+    )
+    assert taker_result.status == "filled"
+    taker_cash = await taker_broker.get_account_balance()
+    # stake $4.40 + taker fee $0.18 — same fill price, ~4x the fee
+    assert taker_cash == pytest.approx(100.0 - 4.40 - 0.18)

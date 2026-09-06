@@ -181,6 +181,32 @@ class SignalRecord(Base):
     context: Mapped[str | None] = mapped_column(Text)  # JSON blob of full inputs
 
 
+class VetoVerdictRecord(Base):
+    """Every local AI veto verdict (tasks.md 7.1/7.6), linked to the signal
+    it reviewed. Persisted unconditionally — approved, rejected, AND every
+    fail-closed path (malformed JSON, request failure, etc.) — so tasks.md
+    7.5's benchmark question ("do verdicts correlate with realized
+    outcomes at all?") can be answered from data later, and so a systematic
+    fail-closed pattern (e.g. the model consistently timing out) is visible
+    in the record rather than silently invisible."""
+
+    __tablename__ = "veto_verdicts"
+    __table_args__ = (Index("ix_veto_verdicts_signal", "signal_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("signals.id"))
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    approved: Mapped[bool] = mapped_column(nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(String(256), nullable=False)
+    raw_response: Mapped[str | None] = mapped_column(Text)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+
+
 class SimulatedTrade(Base):
     """A simulated (backtest or paper) position lifecycle record."""
 

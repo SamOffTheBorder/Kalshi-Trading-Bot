@@ -1,37 +1,42 @@
 """Fractional Kelly sizing for binary contracts.
 
+Kept for backtest comparison only (design decision D3, v2) — Kelly does not
+size live orders; `risk/fixed_risk.py` does.
+
 Full Kelly for a binary bet at cost `c` (dollars, wins pay $1) with win
 probability `p` and net odds `b`:
 
     f* = p - (1 - p) / b        where b = payout / cost
 
 With no fee, b = (1-c)/c and this reduces to the classic (p - c) / (1 - c).
-We size on FEE-ADJUSTED odds (Kalshi keeps 7% of net winnings), so the
-formula the money actually experiences is the one used.
-
-Two layers of restraint, both non-negotiable:
-1. `kelly_fraction` (quarter-Kelly default) — edge estimates are uncertain.
-2. `max_position_pct` hard cap applied AFTER Kelly as a min() clamp — no
-   configuration or Kelly output can exceed it.
+Kalshi's fee is charged ONCE, AT ENTRY, win or lose (see signals/fees.py)
+— it raises the effective cost basis, it does NOT cut the payout. Effective
+cost c' = c + fee(c); the classic formula is then applied to c' with the
+full $1 payout intact: b = (1-c')/c'.
 """
 
 from __future__ import annotations
 
-KALSHI_FEE_RATE = 0.07
+from kalshi_bot.signals.fees import TAKER_FEE_COEFFICIENT, entry_fee_rate_at_price
+
+KALSHI_FEE_RATE = TAKER_FEE_COEFFICIENT  # re-exported for backward compat
 
 
 def binary_kelly_fraction(
     p_win: float,
     cost_dollars: float,
     *,
-    fee_rate: float = KALSHI_FEE_RATE,
+    fee_rate: float = TAKER_FEE_COEFFICIENT,
 ) -> float:
     """Full-Kelly optimal fraction of bankroll. 0.0 when there is no edge."""
     if not 0.0 <= p_win <= 1.0:
         raise ValueError("p_win must be in [0, 1]")
     if not 0.0 < cost_dollars < 1.0:
         raise ValueError("cost_dollars must be in (0, 1)")
-    net_odds = ((1.0 - cost_dollars) * (1.0 - fee_rate)) / cost_dollars
+    effective_cost = cost_dollars + entry_fee_rate_at_price(cost_dollars, coefficient=fee_rate)
+    if effective_cost <= 0.0 or effective_cost >= 1.0:
+        return 0.0
+    net_odds = (1.0 - effective_cost) / effective_cost
     if net_odds <= 0:
         return 0.0
     f_star = p_win - (1.0 - p_win) / net_odds
@@ -57,4 +62,10 @@ def size_binary_position(
         return 0
     fraction = min(kelly_fraction * full_kelly, max_position_pct)  # the clamp
     budget = bankroll_usd * fraction
-    return int(budget // cost_dollars)
+    # Actual dollar outlay per contract is price + entry fee, not price alone
+    # (see signals/fees.py) — using price alone overstates how many
+    # contracts the budget can afford.
+    effective_cost_dollars = cost_dollars + entry_fee_rate_at_price(
+        cost_dollars, coefficient=fee_rate
+    )
+    return int(budget // effective_cost_dollars)

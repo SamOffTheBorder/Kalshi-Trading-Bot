@@ -28,6 +28,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from kalshi_bot.backtest.liveness import is_live_quote
 from kalshi_bot.backtest.metrics import SegmentMetrics, compute_segment_metrics
 from kalshi_bot.execution.backtest_broker import BacktestBroker, MarketBar, Settlement
 from kalshi_bot.execution.broker_protocol import OrderRequest
@@ -38,10 +39,12 @@ from kalshi_bot.signals.volatility import estimate_volatility
 from kalshi_bot.storage.models import BacktestRun, Candle, KalshiMarket, SimulatedTrade, SpotCandle
 from kalshi_bot.storage.records import record_signal
 from kalshi_bot.strategy.base import Action, StrategyContext, StrategyProtocol
+from kalshi_bot.strategy.levels import SpotBar
 
 SERIES_SYMBOL = {
     "KXBTC": "BTC-USD",
     "KXBTCD": "BTC-USD",
+    "KXBTC15M": "BTC-USD",  # design D1's primary instrument — found missing here 2026-09-06
     "KXETH": "ETH-USD",
     "KXETHD": "ETH-USD",
 }
@@ -79,13 +82,24 @@ class BacktestEngine:
         candle_period_minutes: int = 1,
         eval_stride_s: int = 300,
         trend_lookback_s: int = 86_400,
+        spot_bar_window: int = 48,
+        signal_flush_interval: int = 5_000,
     ) -> None:
         """`candle_period_minutes` must be finer than the market lifetime:
         hourly markets get exactly one 60-minute candle — timestamped at the
         market's close, when it's too late to trade — so hourly series are
         only backtestable at 1-minute granularity. `eval_stride_s` throttles
         how often the same market is re-evaluated (matches the ~minutes-scale
-        polling cadence a live loop would use, and keeps MC cost sane)."""
+        polling cadence a live loop would use, and keeps MC cost sane).
+        `spot_bar_window` is how many hourly spot bars (tasks.md 6.1/6.2's
+        `StrategyContext.spot_bars`) precede each evaluation — 48 hours by
+        default, generous enough for `levels.py`'s default lookback/min-touch
+        settings without loading the entire history on every evaluation.
+        `signal_flush_interval` bounds how many pending `SignalRecord` INSERTs
+        accumulate before a `session.flush()` (tasks.md 8.1 finding: a
+        multi-day run at a fine `eval_stride_s` can produce millions of HOLD
+        records, and never flushing until the final commit makes every
+        subsequent autoflush check progressively slower over the run)."""
         self.strategy = strategy
         self.broker = broker
         self.session = session
@@ -97,6 +111,8 @@ class BacktestEngine:
         self.candle_period_minutes = candle_period_minutes
         self.eval_stride_s = eval_stride_s
         self.trend_lookback_s = trend_lookback_s
+        self.spot_bar_window = spot_bar_window
+        self._signal_flush_interval = signal_flush_interval
 
     # -- data loading ------------------------------------------------------------
 
@@ -118,6 +134,43 @@ class BacktestEngine:
         """Value of the latest entry at-or-before ts, None if none exists."""
         idx = bisect.bisect_right(ts_list, ts) - 1
         return values[idx] if idx >= 0 else None
+
+    def _load_spot_bars(self, symbol: str, period_minutes: int) -> list[SpotBar]:
+        """Full-OHLCV spot history for `strategy.levels`-based strategies
+        (tasks.md 6.1/6.2), sorted by `open_ts`. Kept separate from
+        `_load_spot` (close-only, used by the vol/trend-zscore path) rather
+        than changing that method's return shape — `_load_spot` has an
+        established call site and contract, and most callers don't need
+        high/low/volume at all."""
+        rows = self.session.execute(
+            select(SpotCandle)
+            .where(SpotCandle.symbol == symbol, SpotCandle.period_minutes == period_minutes)
+            .order_by(SpotCandle.open_ts)
+        ).scalars()
+        # exchanges may both be present; last write wins per timestamp
+        by_ts: dict[int, SpotBar] = {}
+        for row in rows:
+            by_ts[row.open_ts] = SpotBar(
+                ts=row.open_ts,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
+        return [by_ts[t] for t in sorted(by_ts)]
+
+    @staticmethod
+    def _bars_before(
+        bars: list[SpotBar], bar_ts: list[int], ts: int, *, max_bars: int
+    ) -> tuple[SpotBar, ...]:
+        """The most recent `max_bars` bars strictly before `ts`, oldest
+        first — same look-ahead discipline as the rest of context assembly
+        (spot/vol are computed from data strictly before `ts`). `bar_ts` is
+        `[b.ts for b in bars]`, precomputed once by the caller rather than
+        rebuilt on every evaluation."""
+        idx = bisect.bisect_left(bar_ts, ts)
+        return tuple(bars[max(0, idx - max_bars) : idx])
 
     # -- main loop ------------------------------------------------------------------
 
@@ -167,26 +220,69 @@ class BacktestEngine:
 
         spot_hourly: dict[str, tuple[list[int], list[float]]] = {}
         spot_daily: dict[str, tuple[list[int], list[float]]] = {}
+        spot_bars_hourly: dict[str, list[SpotBar]] = {}
+        spot_bars_ts: dict[str, list[int]] = {}
         for symbol in set(SERIES_SYMBOL.values()):
             spot_hourly[symbol] = self._load_spot(symbol, 60)
             spot_daily[symbol] = self._load_spot(symbol, 1440)
+            spot_bars_hourly[symbol] = self._load_spot_bars(symbol, 60)
+            spot_bars_ts[symbol] = [b.ts for b in spot_bars_hourly[symbol]]
 
         timeline = sorted(set(candles_by_ts) | set(markets_by_close))
         equity_curve: list[tuple[int, float]] = []
         entry_ts_by_market: dict[str, int] = {}
         last_eval_ts: dict[str, int] = {}
         trade_rows: dict[str, SimulatedTrade] = {}
+        # Fixed-R exit levels (contract-cents) for markets whose entry decision
+        # declared them (tasks.md 6.1/6.2 + 8.1's engine extension). A market
+        # not in this dict rides to settlement exactly as before — this is
+        # purely additive, opt-in per decision.
+        exit_levels_by_market: dict[str, tuple[int, int, str]] = {}  # (stop, target, side)
         evaluated = 0
         entered = 0
+        fills_rejected_outside_band = 0
+        dead_quotes = 0
+        closed_early = 0
 
         for ts in timeline:
-            # 1. settle everything that closed at/by this timestep
+            # 1. fixed-R exit check: for every open position with declared
+            # stop/target cents, check THIS market's own candle at ts for a
+            # crossing before settlement is considered — see
+            # `strategy.base.Decision.stop_price_cents`'s docstring for why
+            # this is checked in contract-cents against the market's own
+            # candle rather than derived from spot.
+            for candle in candles_by_ts.get(ts, []):
+                levels = exit_levels_by_market.get(candle.market_ticker)
+                if levels is None:
+                    continue
+                stop_cents, target_cents, side = levels
+                exit_price = _fixed_r_exit_price(candle, side, stop_cents, target_cents)
+                if exit_price is None:
+                    continue
+                settlement = self.broker.close_position_early(candle.market_ticker, exit_price, ts)
+                if settlement is None:
+                    continue
+                del exit_levels_by_market[candle.market_ticker]
+                closed_early += 1
+                trade = trade_rows.get(candle.market_ticker)
+                if trade is not None:
+                    trade.exit_ts = ts
+                    trade.exit_price_cents = exit_price
+                    trade.status = "closed_early"
+                    trade.gross_pnl_usd = settlement.gross_pnl_usd
+                    trade.fee_usd = settlement.fee_usd
+                    trade.net_pnl_usd = settlement.net_pnl_usd
+
+            # 2. settle everything that closed at/by this timestep (a
+            # position already closed early above is no longer open, so
+            # settle_market's own no-op-if-absent guard makes this safe)
             for market in markets_by_close.get(ts, []):
+                exit_levels_by_market.pop(market.ticker, None)
                 self.broker.settle_market(market.ticker, market.result or "", ts)
                 trade = trade_rows.get(market.ticker)
                 if trade is not None and self.broker.settlements:
                     s = self.broker.settlements[-1]
-                    if s.market_ticker == market.ticker:
+                    if s.market_ticker == market.ticker and trade.status == "open":
                         trade.exit_ts = ts
                         trade.exit_price_cents = 100 if s.won else 0
                         trade.status = "settled_won" if s.won else "settled_lost"
@@ -194,7 +290,7 @@ class BacktestEngine:
                         trade.fee_usd = s.fee_usd
                         trade.net_pnl_usd = s.net_pnl_usd
 
-            # 2. equity + guard (open positions marked at entry cost)
+            # 3. equity + guard (open positions marked at entry cost)
             cash = await self.broker.get_account_balance()
             open_positions = await self.broker.get_open_positions()
             equity = cash + sum(p.quantity * p.avg_entry_price_cents / 100 for p in open_positions)
@@ -235,6 +331,13 @@ class BacktestEngine:
                         vol.vol_annual * math.sqrt(lookback_years)
                     )
 
+                spot_bars = self._bars_before(
+                    spot_bars_hourly[symbol],
+                    spot_bars_ts[symbol],
+                    ts,
+                    max_bars=self.spot_bar_window,
+                )
+
                 context = StrategyContext(
                     market_ticker=market.ticker,
                     series_ticker=market.series_ticker,
@@ -249,18 +352,42 @@ class BacktestEngine:
                     vol_annual=vol.vol_annual,
                     vol_source=vol.source,
                     trend_zscore=trend_z,
+                    spot_bars=spot_bars,
                 )
                 decision = self.strategy.evaluate(context)
                 evaluated += 1
                 signal_row = record_signal(
                     self.session, decision, context, mode="backtest", backtest_run_id=run_row.id
                 )
+                if evaluated % self._signal_flush_interval == 0:
+                    # A multi-day run at a fine eval_stride_s can produce
+                    # millions of HOLD SignalRecord objects; leaving them all
+                    # as pending INSERTs until the final commit makes every
+                    # subsequent autoflush check progressively slower
+                    # (observed: an 8.1 backtest run over 636k evaluations
+                    # visibly decelerating over its ~3-minute run).
+                    # Flushing periodically bounds how many pending INSERTs
+                    # accumulate. Deliberately NOT `expire_all()` here: open
+                    # `SimulatedTrade` rows in `trade_rows` are mutated
+                    # in-place later (on settlement/early-close, elsewhere
+                    # in this loop) without re-fetching from the session —
+                    # expiring them would risk a stale read on next access.
+                    self.session.flush()
 
                 if decision.action == Action.HOLD:
                     continue
                 if not self.guard.allows_new_entries():
                     continue
                 if self.throttle is not None and not self.throttle.allows(market.series_ticker, ts):
+                    continue
+                if not is_live_quote(candle):
+                    # Mandatory liveness filter (spec: "Only live markets are
+                    # tradeable"). 92/100 sampled KXBTCD strikes were 0c/1c
+                    # shells with zero OI — Phase 1's backtest filled against
+                    # these phantom quotes. The strategy still gets evaluated
+                    # and its decision recorded above (audit trail), but no
+                    # entry is ever generated for a dead market.
+                    dead_quotes += 1
                     continue
 
                 p_win = (
@@ -270,10 +397,44 @@ class BacktestEngine:
                 )
                 if p_win is None or decision.entry_price_cents is None:
                     continue
+                # Re-mark bankroll immediately before sizing THIS position,
+                # not once per timestep, and size against AVAILABLE CASH, not
+                # total equity (tasks.md 8.3 finding, 2026-09-06, two related
+                # bugs found in sequence):
+                #
+                # 1. When many correlated strikes fire in the same evaluation
+                #    batch (e.g. every threshold on one BTC move), each
+                #    entry's `create_order` call already debits the broker's
+                #    real cash synchronously — but Kelly sizing was reading
+                #    the STALE pre-batch `equity` for every position in the
+                #    batch, so each one sized against the full starting
+                #    bankroll as if it were the only position opened that
+                #    step. Diagnosed via a real run: ~24 simultaneous entries
+                #    each Kelly-sized off the same bankroll figure produced
+                #    an aggregate exposure far beyond any single position's
+                #    own cap, manifesting as a transient equity-marking
+                #    "HALT" that had nothing to do with real risk (every one
+                #    of those positions settled favorably 60 seconds later).
+                # 2. Fixing #1 by re-marking EQUITY (cash + value of already-
+                #    open positions) per entry wasn't enough: equity doesn't
+                #    shrink when cash converts into a new position (the
+                #    position's own cost is still counted as "yours"), so
+                #    concurrent correlated entries within one batch still
+                #    each saw ~the full original bankroll and sized as if it
+                #    were still free to spend — `place_order`'s own
+                #    `cost > self._cash` check then rejected most of them
+                #    outright (all-or-nothing) rather than letting them size
+                #    down proportionally. Sizing against AVAILABLE CASH only
+                #    (excluding money already locked in other open
+                #    positions) is the correct proxy: it's conservative,
+                #    matches what a real margin check would allow you to
+                #    spend, and lets a second/third correlated entry in the
+                #    same batch size down instead of being flatly rejected.
+                live_cash = await self.broker.get_account_balance()
                 quantity = size_binary_position(
                     p_win=p_win,
                     cost_cents=decision.entry_price_cents,
-                    bankroll_usd=equity,
+                    bankroll_usd=live_cash,
                     kelly_fraction=self.kelly_fraction,
                     max_position_pct=self.max_position_pct,
                 )
@@ -289,6 +450,8 @@ class BacktestEngine:
                         yes_ask_high=candle.yes_ask_high,
                         yes_ask_close=candle.yes_ask_close,
                         volume=candle.volume,
+                        yes_bid_high=candle.yes_bid_high,
+                        yes_ask_low=candle.yes_ask_low,
                     )
                 )
                 side = "yes" if decision.action == Action.BUY_YES else "no"
@@ -297,10 +460,49 @@ class BacktestEngine:
                 )
                 if result.status != "filled":
                     continue
+
+                # Entry gates are evaluated against the ACTUAL FILL, not the
+                # price the strategy gated on at decision time (spec:
+                # backtest-engine "Entry gates are evaluated against the
+                # actual fill"). Pessimistic fills can land worse than the
+                # decision price; a fill outside the strategy's own declared
+                # band is voided rather than recorded as a position — this is
+                # the fix for Phase 1's 18/64 (28%) out-of-band trades.
+                fill_price = result.fill_price_cents
+                if fill_price is not None and (
+                    (
+                        decision.min_entry_price_cents is not None
+                        and fill_price < decision.min_entry_price_cents
+                    )
+                    or (
+                        decision.max_entry_price_cents is not None
+                        and fill_price > decision.max_entry_price_cents
+                    )
+                ):
+                    self.broker.void_fill(market.ticker)
+                    fills_rejected_outside_band += 1
+                    logger.warning(
+                        "{}: fill at {}c rejected, outside entry band [{}, {}]",
+                        market.ticker,
+                        fill_price,
+                        decision.min_entry_price_cents,
+                        decision.max_entry_price_cents,
+                    )
+                    continue
+
                 entered += 1
                 if self.throttle is not None:
                     self.throttle.record_entry(market.series_ticker, ts)
                 entry_ts_by_market[market.ticker] = ts
+                if (
+                    decision.stop_price_cents is not None
+                    and decision.target_price_cents is not None
+                ):
+                    exit_levels_by_market[market.ticker] = (
+                        decision.stop_price_cents,
+                        decision.target_price_cents,
+                        side,
+                    )
                 self.session.flush()
                 trade_rows[market.ticker] = SimulatedTrade(
                     backtest_run_id=run_row.id,
@@ -340,10 +542,55 @@ class BacktestEngine:
         self.session.commit()
 
         logger.info(
-            "backtest run {} complete: {} evaluations, {} entries, {} settlements",
+            "backtest run {} complete: {} evaluations, {} entries, {} settlements "
+            "({} closed early on stop/target), {} fills rejected (outside entry band), "
+            "{} dead-quote markets skipped",
             run_row.id,
             evaluated,
             entered,
             len(self.broker.settlements),
+            closed_early,
+            fills_rejected_outside_band,
+            dead_quotes,
         )
         return BacktestResult(run_id=run_row.id, train=train, test=test, final_equity=final_equity)
+
+
+def _fixed_r_exit_price(
+    candle: Candle, side: str, stop_cents: int, target_cents: int
+) -> int | None:
+    """Check ONE candle (this market's own 1-minute contract candle, tasks.md
+    8.1) for a fixed-R stop/target crossing. Pessimistic about the ORDER of
+    events within the bar, same discipline as `BacktestBroker`'s entry fill
+    model: if a bar's range touches BOTH the stop and the target, the stop is
+    assumed to have been hit FIRST (the worse outcome for the position) —
+    this cannot be known from OHLC alone, and assuming the favorable order
+    would be exactly the kind of optimistic-fill lie design decision 4
+    already rejects for entries.
+
+    A `yes` position's contract price tracks `price_high`/`price_low`
+    directly. A `no` position's economic price is `100 - yes_price`, so its
+    stop/target (already expressed as NO-price-equivalent cents by the
+    strategy) are checked against `100 - price_low`/`100 - price_high`
+    (inverted high/low, since a low YES print is a HIGH point for NO).
+
+    Returns the trade-price cents to exit at (the crossed level itself, not
+    the bar's extreme) or None if neither level was reached this bar.
+    """
+    if candle.price_high is None or candle.price_low is None:
+        return None
+    if side == "yes":
+        high, low = candle.price_high, candle.price_low
+    else:
+        # NO-equivalent price range: a low YES print is NO's high, and vice versa.
+        high, low = 100 - candle.price_low, 100 - candle.price_high
+
+    stop_hit = low <= stop_cents
+    target_hit = high >= target_cents
+    if stop_hit and target_hit:
+        return stop_cents  # ambiguous order within the bar -> assume the worse outcome
+    if stop_hit:
+        return stop_cents
+    if target_hit:
+        return target_cents
+    return None

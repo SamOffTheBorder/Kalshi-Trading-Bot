@@ -1,13 +1,18 @@
-"""Persistent archiver loop — run this in its own visible window.
+"""Manual, foreground archiver loop — run this in its own visible window.
 
-Repeatedly archives crypto + weather series at 1-minute granularity, plus spot
-klines, then sleeps. Designed to run for hours/days in a console window you can
-glance at (progress prints) and close anytime (Ctrl+C or just close the window
-— nothing is lost; every fetch is resumable).
+Repeatedly archives BTC series (KXBTC/KXBTCD/KXBTC15M) at 1-minute
+granularity, plus spot klines, then sleeps. Run it yourself, in the foreground,
+for as long as you're actively working — close the window (Ctrl+C, or just
+close it) whenever you're done; nothing is lost, every fetch is resumable.
+
+By explicit decision (2026-09-04), this is NOT meant to run unattended: no
+Windows Scheduled Task, no service, no auto-restart, no staleness alarm. A
+missed session can lose data once it rolls off Kalshi's ~6-week window — that
+trade-off is accepted in exchange for nothing ever running when you're not
+watching it. See openspec/changes/v2-perps-scalping-and-frontend/proposal.md O1.
 
 Every pass is also logged to logs/archiver_loop.log (rotating, kept outside the
-console window) so a silent death leaves evidence instead of a mystery — the
-console window has died silently more than once with nothing to diagnose why.
+console window) so a session's activity leaves evidence instead of a mystery.
 
 Usage:
   uv run python scripts/archiver_loop.py                  # default: every 30 min
@@ -27,23 +32,22 @@ from pathlib import Path
 
 PYTHON = sys.executable
 LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "archiver_loop.log"
-# Weather series first: dirt-cheap to archive (~6 markets/day each, EVERY strike
-# trades — spike 2026-07-16: KXHIGHLAX 5.5M contracts/wk, KXHIGHNY 1.4M) and they
-# are the designated pivot family if crypto validation fails. Crypto after.
+# Crypto-only by explicit decision (2026-09-04): weather series are dropped from
+# collection. Existing weather rows stay in the DB for reference; nothing new is
+# fetched for them. See openspec/changes/v2-perps-scalping-and-frontend/proposal.md O1.
+#
+# BTC-only by further decision (2026-09-04): ETH series (KXETH/KXETHD) dropped
+# too. Existing ETH rows stay in the DB for reference; nothing new is fetched.
+#
+# KXBTC15M (15-min "BTC up?" binary, the primary v2 scalping instrument) uses the
+# same settled-candlestick pipeline as everything else here — verified live that
+# a settled 15-min market's full 1-minute quote/OI history is retrievable the same
+# as any other series (O3 in the same proposal). It needs its own pass at 1-minute
+# period granularity (see below), not the 60-minute default used for the ladders.
 SERIES = [
-    "KXHIGHNY",
-    "KXHIGHLAX",
-    "KXHIGHMIA",
-    "KXHIGHCHI",
-    "KXHIGHAUS",
-    "KXHIGHDEN",
-    "KXHIGHPHIL",
-    "KXLOWTOKC",
-    "KXLOWTDC",
     "KXBTC",
     "KXBTCD",
-    "KXETH",
-    "KXETHD",
+    "KXBTC15M",
 ]
 
 logger = logging.getLogger("archiver_loop")

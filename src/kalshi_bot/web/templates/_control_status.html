@@ -1,0 +1,10 @@
+<div id="control-status" class="control-status {{ 'armed' if control.armed else 'stopped' }}">
+  {% if control.armed %}
+    <span class="dot dot-live"></span> ARMED — {{ control.last_reason }}
+  {% else %}
+    <span class="dot dot-stopped"></span> STOPPED{% if control.halted %} (kill switch){% endif %}
+  {% endif %}
+  {% if control.last_changed_at %}
+    <span class="muted">since {{ control.last_changed_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</span>
+  {% endif %}
+</div>

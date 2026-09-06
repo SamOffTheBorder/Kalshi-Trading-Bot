@@ -45,40 +45,48 @@ class Settings(BaseSettings):
         default=True,
         description="True = Kalshi demo environment; False = production exchange.",
     )
-
-    # --- Webull -------------------------------------------------------------
-    webull_app_key: SecretStr | None = Field(
+    live_trading_confirmation_phrase: SecretStr | None = Field(
         default=None,
-        description="Webull OpenAPI App Key (apply via Webull OpenAPI Management portal).",
-    )
-    webull_app_secret: SecretStr | None = Field(
-        default=None,
-        description="Webull OpenAPI App Secret.",
-    )
-    webull_use_sandbox: bool = Field(
-        default=True,
-        description="True = api.sandbox.webull.com; False = production. Same code path either way.",
+        description="Required before any Kalshi client will place/amend a real order or "
+        "exit trigger against production with paper_trading=False. Must be set to the "
+        "literal phrase 'I understand this places real orders' (case-sensitive) for the "
+        "guard to open; anything else, including unset, keeps production order placement "
+        "blocked. This is the live-trading confirmation flow referenced by paper_trading's "
+        "own description above — a deliberate typing exercise, not a UI, so flipping to "
+        "live trading can never happen by editing one boolean.",
     )
 
     # --- Bankroll & sizing ----------------------------------------------------
     bankroll_total_usd: float = Field(
         default=200.0,
         gt=0,
-        description="Total trading capital across all brokers, in USD.",
-    )
-    bankroll_split_kalshi_pct: float = Field(
-        default=0.65,
-        ge=0.0,
-        le=1.0,
-        description="Fraction of total bankroll allocated to Kalshi (remainder goes to Webull). "
-        "Each broker's allocation is drawdown-tracked independently.",
+        description="Total trading capital, in USD.",
     )
     kelly_fraction: float = Field(
         default=0.25,
         gt=0.0,
         le=0.5,
         description="Fractional Kelly multiplier. 0.25 = quarter-Kelly (conservative default; "
-        "edge estimates are uncertain). Documented tunable band: 0.25-0.5.",
+        "edge estimates are uncertain). Documented tunable band: 0.25-0.5. Backtest "
+        "comparison only (design D3) — does not size live orders.",
+    )
+    risk_pct: float = Field(
+        default=0.01,
+        gt=0.0,
+        le=0.02,
+        description="Fixed-fractional risk per trade for live sizing (risk/fixed_risk.py, "
+        "design D3): fraction of equity lost if the stop is hit. Documented tunable band: "
+        "1-2%. Replaces Kelly on the live path — Kelly requires a win-probability estimate "
+        "Phase 1 proved untrustworthy (model said 40%, actually won 20%).",
+    )
+    max_leverage: float = Field(
+        default=2.0,
+        gt=0.0,
+        le=3.0,
+        description="Perps leverage cap (risk/leverage_governor.py, spec: perps-trading "
+        "'Leverage ceiling below exchange maximum'). Default 2x; hard ceiling 3x regardless "
+        "of the higher maximum Kalshi itself permits — enforced in code "
+        "(HARD_LEVERAGE_CEILING), not just by this field's bound.",
     )
     max_position_pct: float = Field(
         default=0.05,
@@ -170,6 +178,22 @@ class Settings(BaseSettings):
         "An all-time peak makes PAUSE permanently sticky in a settle-to-flat book "
         "(equity can't move while paused) — backtest runs #3-#5 starved every "
         "out-of-sample segment this way. HALT stays sticky regardless.",
+    )
+    max_daily_loss_usd: float = Field(
+        default=20.0,
+        gt=0.0,
+        description="Halt new entries for the rest of the UTC day once realized PnL since "
+        "midnight UTC falls below -max_daily_loss_usd (risk/daily_loss_guard.py, "
+        "EmergencyControl). Independent of the broader equity-curve DrawdownGuard — a bad "
+        "day can trip this without yet being a broader drawdown.",
+    )
+    max_consecutive_losses: int = Field(
+        default=5,
+        ge=1,
+        description="Halt new entries after this many losing trades in a row (any win "
+        "resets the streak). A losing streak usually means the strategy's edge assumption "
+        "broke for current conditions, a distinct failure mode from ordinary variance "
+        "(risk/daily_loss_guard.py, EmergencyControl).",
     )
 
     # --- AI layer -------------------------------------------------------------
