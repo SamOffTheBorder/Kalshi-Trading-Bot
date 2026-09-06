@@ -8,16 +8,20 @@ lie; this one is built to understate, never overstate.
 
 Fee model (corrected, v2 — see signals/fees.py): Kalshi charges
 `ceil(coef * P * (1-P) * n * 100) / 100` dollars, **at entry, win or lose**.
-There is no settlement fee. Default execution is "taker" (crosses the
-spread, pessimistic fill = worst plausible price, taker coefficient 0.07).
-`OrderRequest.execution_style="maker"` (task 3.4) instead rests at the
-order's own `limit_price_cents` and fills only if the bar shows the OTHER
-side of the book traded through that level — proof a counterparty existed —
-at the maker coefficient (0.0175, ~1/4 of taker). A maker order that isn't
-touched is rejected, not partially filled or repriced.
+There is no settlement fee. Entry crosses the spread at the taker
+coefficient (0.07); an early close (`close_position_early`) is a second
+taker order and pays its own fee on the exit price.
 
-Positions are held to expiry and settled against the market's official
-result — matching the Phase 1 strategy scope (entries only, no early exits).
+Execution model (kxbtc15m-validation-rebuild §2.5): TAKER ONLY. Every fill
+is a marketable order at the bar's worst plausible price. `execution_style`
+survives on `OrderRequest` for a future queue/partial-fill model, but a
+`"maker"` order is recorded UNFILLED here — a resting fill cannot be
+inferred from a candle's high/low range without overstating fill quality
+and ignoring queue priority.
+
+Positions ride to expiry and settle against the official result unless a
+decision carries fixed-R exit levels, in which case `close_position_early`
+may end them sooner.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ from kalshi_bot.execution.broker_protocol import (
     OrderResult,
     Position,
 )
-from kalshi_bot.signals.fees import MAKER_FEE_COEFFICIENT, TAKER_FEE_COEFFICIENT, entry_fee_dollars
+from kalshi_bot.signals.fees import TAKER_FEE_COEFFICIENT, entry_fee_dollars
 
 FillMode = Literal["pessimistic", "midpoint"]
 
@@ -57,7 +61,12 @@ class MarketBar:
 @dataclass
 class _OpenPosition:
     side: Literal["yes", "no"]
-    quantity: int
+    # float, not int: Kalshi EVENT contracts fill in whole units, but the
+    # lifecycle record must not truncate (kxbtc15m-validation-rebuild §2.4 /
+    # design "fractional quantities without truncation") and the same broker
+    # path serves fractional perp sizing later. Event-contract callers still
+    # pass ints; nothing here rounds them.
+    quantity: float
     entry_price_cents: int
     entry_ts: int
     entry_fee_usd: float  # paid at entry, win or lose — see signals/fees.py
@@ -67,14 +76,27 @@ class _OpenPosition:
 class Settlement:
     market_ticker: str
     side: Literal["yes", "no"]
-    quantity: int
+    quantity: float
     entry_price_cents: int
     entry_ts: int
     won: bool
     gross_pnl_usd: float
-    fee_usd: float
+    # Every matched-order fee, kept separate (kxbtc15m-validation-rebuild
+    # §2.4: "record… every matched-order fee"). `entry_fee_usd` is paid when
+    # the position is opened, win or lose. `exit_fee_usd` is charged ONLY on
+    # an early close (`close_position_early`) — an early exit is a second
+    # taker order that crosses the spread, so it incurs its own fee on the
+    # exit price; a hold-to-expiry settlement is not an order and stays
+    # fee-free (`exit_fee_usd == 0.0`). `fee_usd` is their sum, kept for
+    # back-compat with existing metrics/readers.
+    entry_fee_usd: float
+    exit_fee_usd: float
     net_pnl_usd: float
     settled_ts: int
+
+    @property
+    def fee_usd(self) -> float:
+        return self.entry_fee_usd + self.exit_fee_usd
 
 
 class BacktestBroker:
@@ -131,27 +153,46 @@ class BacktestBroker:
         """Close an open position before market settlement at a specific
         contract price — the fixed-R stop/target exit path (tasks.md 6.1/6.2
         + 8.1's engine extension), as distinct from `settle_market`'s
-        hold-to-expiry path. Charges no additional fee: Kalshi's fee is
-        entry-only (signals/fees.py), same accounting as `settle_market`.
+        hold-to-expiry path.
+
+        An early exit is a SECOND taker order: it crosses the spread to sell
+        the position back, so it incurs its own fee on the exit price
+        (kxbtc15m-validation-rebuild §2.4: "charge a close-leg fee for an
+        early exit"). This is not a settlement fee — a position held to
+        expiry is never re-ordered and stays fee-free in `settle_market`.
+        The exit fee uses the same taker schedule as entry
+        (`signals/fees.py`) and is deducted from the exit proceeds; the
+        side-aware NO-exit-value convention is unchanged.
+
         No-op (returns None) if there is no open position for the ticker —
         the engine may call this defensively without checking first."""
         pos = self._positions.pop(market_ticker, None)
         if pos is None:
             return None
+        # `exit_price_cents` is expressed in the SAME price convention as the
+        # held side: a YES-price for a YES position, a NO-price (= 100 - the
+        # YES print) for a NO position — the engine's `_fixed_r_exit_price`
+        # already inverts YES candle prints for a NO position, and
+        # `pos.entry_price_cents` is likewise the price actually paid for
+        # that side. So both branches are "bought a contract at `entry`,
+        # selling it back at `exit`" and the arithmetic is identical; only
+        # the semantics of the number differ.
         entry_cost = pos.entry_price_cents / 100
         exit_value = exit_price_cents / 100
-        if pos.side == "yes":
-            # Sold at exit_value/contract: proceeds = exit_value * quantity.
-            won = exit_price_cents > pos.entry_price_cents
-            gross = (exit_value - entry_cost) * pos.quantity
-            proceeds = exit_value * pos.quantity
-        else:
-            # A NO position's contract price is (1 - yes_price); "selling"
-            # it back means receiving (1 - exit_value) per contract.
-            won = exit_price_cents < pos.entry_price_cents
-            gross = (entry_cost - exit_value) * pos.quantity
-            proceeds = (1.0 - exit_value) * pos.quantity
-        self._cash += proceeds
+        # A position of EITHER side gains when the price of the contract it
+        # holds rises (kxbtc15m-validation-rebuild §2.4: "NO position gains
+        # when NO exit price rises"). Proceeds are the sale value of that
+        # same contract.
+        won = exit_price_cents > pos.entry_price_cents
+        gross = (exit_value - entry_cost) * pos.quantity
+        proceeds = exit_value * pos.quantity
+        # Fee on the exit order itself. The fee formula peaks at P=0.5 and is
+        # symmetric about it, so a price and its 100-complement carry the
+        # same fee — the held-side price is the right argument either way.
+        exit_fee = entry_fee_dollars(
+            exit_price_cents, pos.quantity, coefficient=TAKER_FEE_COEFFICIENT
+        )
+        self._cash += proceeds - exit_fee
         settlement = Settlement(
             market_ticker=market_ticker,
             side=pos.side,
@@ -160,8 +201,9 @@ class BacktestBroker:
             entry_ts=pos.entry_ts,
             won=won,
             gross_pnl_usd=gross,
-            fee_usd=pos.entry_fee_usd,
-            net_pnl_usd=gross - pos.entry_fee_usd,
+            entry_fee_usd=pos.entry_fee_usd,
+            exit_fee_usd=exit_fee,
+            net_pnl_usd=gross - pos.entry_fee_usd - exit_fee,
             settled_ts=exit_ts,
         )
         self.settlements.append(settlement)
@@ -193,7 +235,8 @@ class BacktestBroker:
                 entry_ts=pos.entry_ts,
                 won=won,
                 gross_pnl_usd=gross,
-                fee_usd=pos.entry_fee_usd,
+                entry_fee_usd=pos.entry_fee_usd,
+                exit_fee_usd=0.0,  # held to expiry — no exit order, no fee
                 net_pnl_usd=gross - pos.entry_fee_usd,
                 settled_ts=settled_ts,
             )
@@ -215,30 +258,14 @@ class BacktestBroker:
             return None
         return 100 - round((bar.yes_bid_close + bar.yes_ask_close) / 2)
 
-    def _maker_fill_price_cents(
-        self, bar: MarketBar, side: str, limit_price_cents: int
-    ) -> int | None:
-        """A resting (maker) order fills at exactly the requested limit price
-        — never worse, that's the point of resting — but only if the OTHER
-        side of the book traded through that level at some point in the bar,
-        proving a counterparty existed to cross it. No such evidence -> no
-        fill (pessimistic about maker fills too: we do not assume a passive
-        order gets picked off just because it was posted).
-
-        YES buy resting at L: fills iff the ask traded down to L or below
-        at some point (bar.yes_ask_low <= L) — someone sold into the resting bid.
-        NO buy resting at L (NO price = 100 - yes_bid): fills iff the bid
-        traded up to (100 - L) or above (bar.yes_bid_high >= 100 - L) —
-        someone bought YES aggressively enough to lift the bid to where a
-        resting NO order at L would cross.
-        """
-        if side == "yes":
-            if bar.yes_ask_low is None or bar.yes_ask_low > limit_price_cents:
-                return None
-            return limit_price_cents
-        if bar.yes_bid_high is None or bar.yes_bid_high < 100 - limit_price_cents:
-            return None
-        return limit_price_cents
+    # NOTE (kxbtc15m-validation-rebuild §2.5): the previous
+    # `_maker_fill_price_cents` inferred a resting-order fill from a candle's
+    # high/low range (e.g. "the ask traded down through my limit, so I
+    # filled"). A candle range is not observed-fill evidence: it says a
+    # price printed, not that a resting order at that price and its queue
+    # position were actually matched. The initial execution model is
+    # taker-only; a maker order is recorded UNFILLED until a queue/partial-
+    # fill model backed by real fill data exists. See `place_order`.
 
     # -- BrokerAdapter -------------------------------------------------------------
 
@@ -279,19 +306,20 @@ class BacktestBroker:
             return reject("position_already_open")
 
         if order.execution_style == "maker":
-            if order.limit_price_cents is None:
-                return reject("maker_requires_limit_price")
-            price_cents = self._maker_fill_price_cents(bar, order.side, order.limit_price_cents)
-            fee_coefficient = MAKER_FEE_COEFFICIENT
-            if price_cents is None:
-                return reject("resting_order_not_touched")
-        else:
-            price_cents = self._fill_price_cents(bar, order.side)
-            fee_coefficient = TAKER_FEE_COEFFICIENT
-            if price_cents is None or not 1 <= price_cents <= 99:
-                return reject("no_fillable_quote")
-            if order.limit_price_cents is not None and price_cents > order.limit_price_cents:
-                return reject("limit_exceeded")
+            # Taker-only executable pricing is the initial model
+            # (kxbtc15m-validation-rebuild §2.5). A resting order cannot be
+            # filled from candle-range inference — that overstates fill
+            # quality and ignores queue priority — so a maker order is
+            # recorded unfilled until a validated queue/partial-fill model
+            # backed by observed fills exists.
+            return reject("maker_unfilled_no_validated_model")
+
+        price_cents = self._fill_price_cents(bar, order.side)
+        fee_coefficient = TAKER_FEE_COEFFICIENT
+        if price_cents is None or not 1 <= price_cents <= 99:
+            return reject("no_fillable_quote")
+        if order.limit_price_cents is not None and price_cents > order.limit_price_cents:
+            return reject("limit_exceeded")
 
         quantity = order.quantity
         if bar.volume is not None:

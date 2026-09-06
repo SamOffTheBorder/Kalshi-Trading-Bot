@@ -109,6 +109,14 @@ class LevelBreakStrategy:
             stop_price = broken_low.price
             action, entry_cents, side = Action.BUY_NO, 100 - context.yes_bid_cents, "no"
 
+        # Side-consistent fair probability — see the identical note in
+        # trend_scalp.py (kxbtc15m-validation-rebuild §2.3). This breakout
+        # signal has no probability model; until the settlement-aware baseline
+        # exists it reports the executable price as an implied probability so
+        # sizing stays edge-neutral and the engine's no-certainty contract is
+        # satisfied.
+        fair_probability = entry_cents / 100
+
         r = abs(entry_price - stop_price)
         if r <= 0:
             return hold("degenerate_r")
@@ -118,9 +126,7 @@ class LevelBreakStrategy:
             else entry_price - cfg.r_multiple_target * r
         )
 
-        stop_price_cents = spot_r_to_contract_cents(
-            entry_price, stop_price, entry_cents, side=side
-        )
+        stop_price_cents = spot_r_to_contract_cents(entry_price, stop_price, entry_cents, side=side)
         target_price_cents = spot_r_to_contract_cents(
             entry_price, target_price, entry_cents, side=side
         )
@@ -129,6 +135,7 @@ class LevelBreakStrategy:
             action=action,
             market_ticker=context.market_ticker,
             strategy_name=self.name,
+            fair_probability=fair_probability,
             entry_price_cents=entry_cents,
             stop_price=stop_price,
             target_price=target_price,

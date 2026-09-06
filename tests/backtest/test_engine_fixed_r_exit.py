@@ -47,6 +47,7 @@ class FixedRTestStrategy:
                 action=Action.BUY_YES,
                 market_ticker=context.market_ticker,
                 strategy_name=self.name,
+                fair_probability=0.90,
                 bs_probability=0.90,
                 entry_price_cents=entry,
                 stop_price_cents=max(1, entry - 10),

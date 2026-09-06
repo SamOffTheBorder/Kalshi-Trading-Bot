@@ -27,7 +27,8 @@ def _settlement(
         entry_ts=ts,
         won=won,
         gross_pnl_usd=gross,
-        fee_usd=gross - net if won else 0.2,
+        entry_fee_usd=gross - net if won else 0.2,
+        exit_fee_usd=0.0,
         net_pnl_usd=net,
         settled_ts=ts + 900,
     )

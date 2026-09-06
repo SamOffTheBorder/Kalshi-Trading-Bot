@@ -78,6 +78,15 @@ class Decision:
     market_ticker: str
     strategy_name: str
 
+    # P(this decision's own side wins) — side-consistent, in [0, 1]. For
+    # BUY_YES this is P(YES resolves), for BUY_NO it is P(NO resolves) =
+    # 1 - P(YES). Every BUY decision MUST set this; the engine sizes and
+    # gates directly on it and does NOT invert or default it (kxbtc15m-
+    # validation-rebuild §2.3: "no default certainty path"). A BUY that
+    # leaves it None is dropped with a logged reason rather than treated as
+    # a sure thing. HOLDs leave it None.
+    fair_probability: float | None = None
+
     bs_probability: float | None = None
     mc_probability: float | None = None
     raw_edge: float | None = None

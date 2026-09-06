@@ -95,9 +95,7 @@ class TrendScalpStrategy:
             (
                 lvl
                 for lvl in candidates
-                if level_is_respected(
-                    lvl, approach_price, last_bar.close, cfg.level_tolerance_pct
-                )
+                if level_is_respected(lvl, approach_price, last_bar.close, cfg.level_tolerance_pct)
             ),
             None,
         )
@@ -128,9 +126,19 @@ class TrendScalpStrategy:
         else:
             action, entry_cents, side = Action.BUY_NO, 100 - context.yes_bid_cents, "no"
 
-        stop_price_cents = spot_r_to_contract_cents(
-            entry_price, stop_price, entry_cents, side=side
-        )
+        # Side-consistent fair probability (kxbtc15m-validation-rebuild §2.3:
+        # every BUY must carry one; the engine no longer infers certainty from
+        # a missing value). This strategy has no probability model of its own —
+        # per the rebuild's design, short-horizon trend is a *conditional
+        # feature* on top of the settlement-aware baseline (task 4.x), not a
+        # standalone edge. Until that baseline exists, the honest estimate is
+        # the contract's own executable price read as an implied probability:
+        # it makes fixed-risk sizing degenerate to ~zero edge (correct — an
+        # unproven signal should not size up) while still being a valid,
+        # side-consistent number rather than a 1.0 sure-thing.
+        fair_probability = entry_cents / 100
+
+        stop_price_cents = spot_r_to_contract_cents(entry_price, stop_price, entry_cents, side=side)
         target_price_cents = spot_r_to_contract_cents(
             entry_price, target_price, entry_cents, side=side
         )
@@ -139,6 +147,7 @@ class TrendScalpStrategy:
             action=action,
             market_ticker=context.market_ticker,
             strategy_name=self.name,
+            fair_probability=fair_probability,
             entry_price_cents=entry_cents,
             stop_price=stop_price,
             target_price=target_price,

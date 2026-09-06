@@ -172,6 +172,11 @@ class SignalRecord(Base):
     action: Mapped[str] = mapped_column(String(8), nullable=False)  # BUY_YES|BUY_NO|HOLD
 
     market_yes_price: Mapped[int | None] = mapped_column(Integer)  # cents
+    # P(this decision's chosen side wins), side-consistent (kxbtc15m-
+    # validation-rebuild §2.3). None for HOLDs. This is the number the engine
+    # actually sizes and gates on — distinct from `bs_probability`, which is
+    # a model-specific YES probability only some strategies produce.
+    fair_probability: Mapped[float | None] = mapped_column(Float)
     bs_probability: Mapped[float | None] = mapped_column(Float)
     mc_probability: Mapped[float | None] = mapped_column(Float)
     raw_edge: Mapped[float | None] = mapped_column(Float)
@@ -220,7 +225,10 @@ class SimulatedTrade(Base):
 
     market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
     side: Mapped[str] = mapped_column(String(4), nullable=False)  # yes|no
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Float, not Integer: event contracts trade in whole units but the record
+    # must not truncate (kxbtc15m-validation-rebuild §2.4); the same field
+    # carries fractional perp sizing later.
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
     entry_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     entry_ts: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -230,5 +238,11 @@ class SimulatedTrade(Base):
     # open | settled_won | settled_lost | closed_early
 
     gross_pnl_usd: Mapped[float | None] = mapped_column(Float)
+    # Each matched-order fee, recorded separately (kxbtc15m-validation-rebuild
+    # §2.4). entry_fee_usd: paid on open, win or lose. exit_fee_usd: charged
+    # only on an early close (a second taker order); 0 for a hold-to-expiry
+    # settlement. fee_usd stays as their sum for existing readers.
+    entry_fee_usd: Mapped[float | None] = mapped_column(Float)
+    exit_fee_usd: Mapped[float | None] = mapped_column(Float)
     fee_usd: Mapped[float | None] = mapped_column(Float)
     net_pnl_usd: Mapped[float | None] = mapped_column(Float)

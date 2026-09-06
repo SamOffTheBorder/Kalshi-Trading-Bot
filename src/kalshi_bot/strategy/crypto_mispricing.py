@@ -163,6 +163,7 @@ class CryptoMispricingStrategy:
             market_ticker=context.market_ticker,
             strategy_name=self.name,
             confidence=confidence,
+            fair_probability=p_win,  # already inverted for BUY_NO above
             entry_price_cents=entry_cents,
             bs_probability=bs,
             mc_probability=mc,

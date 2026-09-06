@@ -47,6 +47,7 @@ class DeterministicStrategy:
                 action=Action.BUY_YES,
                 market_ticker=context.market_ticker,
                 strategy_name=self.name,
+                fair_probability=0.90,
                 bs_probability=0.90,
                 entry_price_cents=context.yes_ask_cents,
             )
@@ -261,6 +262,7 @@ class BandedStrategy:
                 action=Action.BUY_YES,
                 market_ticker=context.market_ticker,
                 strategy_name=self.name,
+                fair_probability=0.90,
                 bs_probability=0.90,
                 entry_price_cents=context.yes_ask_cents,
                 # M1's decision price (yes_ask_close) is 40c, comfortably

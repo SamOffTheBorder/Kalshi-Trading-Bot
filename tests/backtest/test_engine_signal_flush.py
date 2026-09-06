@@ -39,6 +39,7 @@ class EnterOnceThenHoldStrategy:
                 action=Action.BUY_YES,
                 market_ticker=context.market_ticker,
                 strategy_name=self.name,
+                fair_probability=0.9,
                 bs_probability=0.9,
                 entry_price_cents=context.yes_ask_cents,
             )

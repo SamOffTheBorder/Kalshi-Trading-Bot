@@ -270,6 +270,8 @@ class BacktestEngine:
                     trade.exit_price_cents = exit_price
                     trade.status = "closed_early"
                     trade.gross_pnl_usd = settlement.gross_pnl_usd
+                    trade.entry_fee_usd = settlement.entry_fee_usd
+                    trade.exit_fee_usd = settlement.exit_fee_usd
                     trade.fee_usd = settlement.fee_usd
                     trade.net_pnl_usd = settlement.net_pnl_usd
 
@@ -287,6 +289,8 @@ class BacktestEngine:
                         trade.exit_price_cents = 100 if s.won else 0
                         trade.status = "settled_won" if s.won else "settled_lost"
                         trade.gross_pnl_usd = s.gross_pnl_usd
+                        trade.entry_fee_usd = s.entry_fee_usd
+                        trade.exit_fee_usd = s.exit_fee_usd
                         trade.fee_usd = s.fee_usd
                         trade.net_pnl_usd = s.net_pnl_usd
 
@@ -390,12 +394,33 @@ class BacktestEngine:
                     dead_quotes += 1
                     continue
 
-                p_win = (
-                    decision.bs_probability
-                    if decision.action == Action.BUY_YES
-                    else 1.0 - (decision.bs_probability or 0.0)
-                )
-                if p_win is None or decision.entry_price_cents is None:
+                # Side-consistent win probability comes straight from the
+                # decision — P(the chosen side wins), already inverted by the
+                # strategy for a NO decision (kxbtc15m-validation-rebuild
+                # §2.3). No `1 - (x or 0)` fallback: that turned every
+                # directional strategy's BUY_NO (which sets no bs_probability)
+                # into p_win = 1.0, i.e. certainty, and left its BUY_YES at
+                # p_win = None -> silently dropped below. A BUY that fails to
+                # declare `fair_probability` is a strategy bug; drop it loudly
+                # rather than sizing it as a sure thing.
+                p_win = decision.fair_probability
+                if p_win is None:
+                    logger.warning(
+                        "{}: {} decision from {} has no fair_probability; not entering",
+                        market.ticker,
+                        decision.action,
+                        decision.strategy_name,
+                    )
+                    continue
+                if not 0.0 <= p_win <= 1.0:
+                    logger.warning(
+                        "{}: {} fair_probability {} outside [0, 1]; not entering",
+                        market.ticker,
+                        decision.action,
+                        p_win,
+                    )
+                    continue
+                if decision.entry_price_cents is None:
                     continue
                 # Re-mark bankroll immediately before sizing THIS position,
                 # not once per timestep, and size against AVAILABLE CASH, not
