@@ -281,7 +281,10 @@ class BacktestBroker:
             Position(
                 market_ticker=ticker,
                 side=pos.side,
-                quantity=pos.quantity,
+                # `_OpenPosition.quantity` is annotated `float` for §2.4's
+                # fractional-sizing path, but every fill writes a whole
+                # contract count; the public DTO reports whole contracts.
+                quantity=int(pos.quantity),
                 avg_entry_price_cents=float(pos.entry_price_cents),
             )
             for ticker, pos in self._positions.items()

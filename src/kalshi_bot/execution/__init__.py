@@ -16,8 +16,8 @@ __all__ = [
     "MarketSnapshot",
     "OrderRequest",
     "OrderResult",
-    "Position",
     "OrderTracker",
+    "Position",
     "TrackedOrder",
     "require_linear_hedge_instrument",
 ]

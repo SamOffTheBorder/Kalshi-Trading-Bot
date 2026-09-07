@@ -46,10 +46,13 @@ from kalshi_bot.execution.backtest_broker import BacktestBroker, MarketBar, Sett
 from kalshi_bot.execution.broker_protocol import OrderRequest
 from kalshi_bot.risk.drawdown_guard import DrawdownGuard
 from kalshi_bot.risk.entry_throttle import EntryThrottle
+from kalshi_bot.risk.fixed_risk import FixedRiskConfig, size_validation_position
 from kalshi_bot.risk.kelly import size_binary_position
+from kalshi_bot.signals.settlement_window import BRTIReading
 from kalshi_bot.signals.volatility import estimate_volatility
 from kalshi_bot.storage.models import (
     BacktestRun,
+    BRTIObservation,
     Candle,
     KalshiMarket,
     SignalRecord,
@@ -59,6 +62,11 @@ from kalshi_bot.storage.models import (
 from kalshi_bot.storage.records import record_signal
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext, StrategyProtocol
 from kalshi_bot.strategy.levels import SpotBar
+
+# How far back from an evaluation the settlement-aware strategies read BRTI:
+# the full 15-minute KXBTC15M lifetime, the 60 s reference average at the
+# window open, and the short-horizon trend lookback all fit inside 30 min.
+_BRTI_SLICE_WINDOW_S = 1_800
 
 SERIES_SYMBOL = {
     "KXBTC": "BTC-USD",
@@ -122,6 +130,8 @@ class BacktestEngine:
         trend_lookback_s: int = 86_400,
         spot_bar_window: int = 48,
         signal_flush_interval: int = 5_000,
+        sizing_mode: Literal["kelly", "fixed_risk"] = "kelly",
+        fixed_risk_config: FixedRiskConfig | None = None,
     ) -> None:
         """`candle_period_minutes` must be finer than the market lifetime:
         hourly markets get exactly one 60-minute candle — timestamped at the
@@ -137,7 +147,19 @@ class BacktestEngine:
         accumulate before a `session.flush()` (tasks.md 8.1 finding: a
         multi-day run at a fine `eval_stride_s` can produce millions of HOLD
         records, and never flushing until the final commit makes every
-        subsequent autoflush check progressively slower over the run)."""
+        subsequent autoflush check progressively slower over the run).
+
+        `sizing_mode` selects the position-sizing rule at fill time.
+        `"kelly"` (default, `risk/kelly.size_binary_position`) is retained for
+        diagnostic comparison runs. `"fixed_risk"`
+        (`risk/fixed_risk.size_validation_position`) is the validation path
+        (kxbtc15m-validation-rebuild §3.1): fixed fraction of equity risked
+        against the executable stop distance and both-leg costs, never Kelly.
+        A hold-to-settlement binary has no contract stop, so its worst case
+        is the full premium — the fixed-risk sizer is called with
+        `stop_price_cents=0` and `include_exit_fee=False` in that case.
+        `fixed_risk_config` supplies the risk fraction / caps; defaults to
+        `FixedRiskConfig()` when `sizing_mode == "fixed_risk"`."""
         self.strategy = strategy
         self.broker = broker
         self.session = session
@@ -151,6 +173,10 @@ class BacktestEngine:
         self.trend_lookback_s = trend_lookback_s
         self.spot_bar_window = spot_bar_window
         self._signal_flush_interval = signal_flush_interval
+        self.sizing_mode = sizing_mode
+        self.fixed_risk_config = fixed_risk_config or (
+            FixedRiskConfig() if sizing_mode == "fixed_risk" else None
+        )
 
     # -- data loading ------------------------------------------------------------
 
@@ -172,6 +198,45 @@ class BacktestEngine:
         """Value of the latest entry at-or-before ts, None if none exists."""
         idx = bisect.bisect_right(ts_list, ts) - 1
         return values[idx] if idx >= 0 else None
+
+    def _load_brti(self, start_ts: int, end_ts: int) -> tuple[list[int], tuple[BRTIReading, ...]]:
+        """Every `BRTIObservation` whose value could have been observed within
+        the run window, oldest first, as `signals.settlement_window.BRTIReading`
+        (kxbtc15m-validation-rebuild §4.1). Returned alongside a parallel list
+        of `usable_at` timestamps so the per-evaluation slice is a bisect, not
+        a scan. `value_dollars` is a decimal string in the schema; parsed to
+        float here. A checkout with no BRTI rows yields an empty tuple and the
+        settlement strategy HOLDs on `no_brti_readings` — never a crash."""
+        rows = self.session.execute(
+            select(BRTIObservation)
+            .where(
+                BRTIObservation.observed_at >= start_ts - 3_600,
+                BRTIObservation.observed_at <= end_ts,
+            )
+            .order_by(BRTIObservation.available_at)
+        ).scalars()
+        readings = tuple(
+            BRTIReading(
+                observed_at=r.observed_at,
+                value=float(r.value_dollars),
+                available_at=r.available_at,
+            )
+            for r in rows
+        )
+        return [r.usable_at for r in readings], readings
+
+    @staticmethod
+    def _brti_before(
+        usable_ts: list[int], readings: tuple[BRTIReading, ...], ts: int, *, window_s: int
+    ) -> tuple[BRTIReading, ...]:
+        """BRTI readings usable at-or-before `ts` and no older than
+        `window_s` before it, oldest first. `window_s` bounds the slice to
+        what the settlement-window model actually consumes (its reference and
+        current 60 s averages plus a trend lookback) so a multi-day run does
+        not hand the strategy the entire index history on every evaluation."""
+        hi = bisect.bisect_right(usable_ts, ts)
+        lo = bisect.bisect_left(usable_ts, ts - window_s, 0, hi)
+        return readings[lo:hi]
 
     def _load_spot_bars(self, symbol: str, period_minutes: int) -> list[SpotBar]:
         """Full-OHLCV spot history for `strategy.levels`-based strategies
@@ -255,13 +320,37 @@ class BacktestEngine:
         assert decision.fair_probability is not None  # checked before queuing
         assert decision.entry_price_cents is not None
         live_cash = await self.broker.get_account_balance()
-        quantity = size_binary_position(
-            p_win=decision.fair_probability,
-            cost_cents=decision.entry_price_cents,
-            bankroll_usd=live_cash,
-            kelly_fraction=self.kelly_fraction,
-            max_position_pct=self.max_position_pct,
-        )
+        if self.sizing_mode == "fixed_risk":
+            assert self.fixed_risk_config is not None
+            # A contract stop opts a strategy into fixed-R exit simulation;
+            # without one the position is held to settlement and its worst
+            # case is the full premium (contract -> 0c), so stop_price_cents=0
+            # and no exit-leg fee.
+            stop_cents = decision.stop_price_cents
+            has_stop = stop_cents is not None
+            sized = size_validation_position(
+                equity_usd=live_cash,
+                entry_price_cents=decision.entry_price_cents,
+                stop_price_cents=stop_cents if stop_cents is not None else 0,
+                config=self.fixed_risk_config
+                if has_stop
+                else FixedRiskConfig(
+                    risk_pct=self.fixed_risk_config.risk_pct,
+                    max_position_pct=self.fixed_risk_config.max_position_pct,
+                    fee_coefficient=self.fixed_risk_config.fee_coefficient,
+                    include_exit_fee=False,
+                    version=self.fixed_risk_config.version,
+                ),
+            )
+            quantity = int(sized)
+        else:
+            quantity = size_binary_position(
+                p_win=decision.fair_probability,
+                cost_cents=decision.entry_price_cents,
+                bankroll_usd=live_cash,
+                kelly_fraction=self.kelly_fraction,
+                max_position_pct=self.max_position_pct,
+            )
         if quantity <= 0:
             return "no_fill"
 
@@ -387,6 +476,12 @@ class BacktestEngine:
             spot_daily[symbol] = self._load_spot(symbol, 1440)
             spot_bars_hourly[symbol] = self._load_spot_bars(symbol, 60)
             spot_bars_ts[symbol] = [b.ts for b in spot_bars_hourly[symbol]]
+
+        # BRTI index history for the settlement-aware strategies (§4.1). One
+        # series (BTC), loaded once; sliced per evaluation to the window the
+        # settlement model consumes — the full 15-minute market lifetime plus
+        # the 60 s reference average and the short-horizon trend lookback.
+        brti_usable_ts, brti_readings = self._load_brti(start_ts, end_ts)
 
         timeline = sorted(set(candles_by_ts) | set(markets_by_close))
         equity_curve: list[tuple[int, float]] = []
@@ -568,6 +663,9 @@ class BacktestEngine:
                     vol_source=vol.source,
                     trend_zscore=trend_z,
                     spot_bars=spot_bars,
+                    brti_readings=self._brti_before(
+                        brti_usable_ts, brti_readings, ts, window_s=_BRTI_SLICE_WINDOW_S
+                    ),
                 )
                 decision = self.strategy.evaluate(context)
                 evaluated += 1
