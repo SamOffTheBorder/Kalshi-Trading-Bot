@@ -22,6 +22,14 @@ def test_event_discovery_records_valid_series():
     assert result.metadata["active_market_count"] == 1
 
 
+def test_event_discovery_accepts_kalshi_fifteen_min_frequency():
+    instrument = get_asset("ETH").instrument("15m")
+    result = EventSeriesDiscovery(
+        FakePublic({"frequency": "fifteen_min", "contract_shape": "binary"}), clock=lambda: 100
+    ).check(get_asset("ETH"), instrument)
+    assert result.eligible is True
+
+
 def test_event_discovery_fails_closed_on_missing_series():
     instrument = get_asset("ETH").instrument("15m")
     result = EventSeriesDiscovery(FakePublic({}), clock=lambda: 100).check(

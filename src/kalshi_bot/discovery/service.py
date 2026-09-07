@@ -69,6 +69,7 @@ class EventSeriesDiscovery:
                 "15",
                 "15minute",
                 "15_minutes",
+                "fifteen_min",
             }:
                 raise ValueError("cadence_mismatch")
             if instrument.cadence == "60m" and cadence.lower() not in {
@@ -77,6 +78,7 @@ class EventSeriesDiscovery:
                 "hourly",
                 "1h",
                 "60minute",
+                "hour",
             }:
                 raise ValueError("cadence_mismatch")
             metadata = {
