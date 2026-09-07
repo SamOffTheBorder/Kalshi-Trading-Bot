@@ -109,7 +109,40 @@
 
 ## 4. Settlement-Aware and Trend Research
 
-- [ ] 4.1 Implement KXBTC15M target and settlement-window feature construction from timestamped BRTI observations and time remaining.
+- [x] 4.1 Implement KXBTC15M target and settlement-window feature construction from
+      timestamped BRTI observations and time remaining.
+
+      **Done.** New `src/kalshi_bot/signals/settlement_window.py` — storage-free and
+      strategy-free (same decoupling as `strategy/levels.py`), so it is unit-testable
+      with synthetic BRTI series and carries no ORM/protocol dependency.
+      - `BRTIReading(observed_at, value, available_at)` — `available_at` is the §1.3
+        causal stamp (when a live system could first act on the value); `usable_at`
+        falls back to `observed_at` when it is absent.
+      - `window_average(readings, end_ts, window_seconds=60, now_ts=None)` — mean BRTI
+        over `(end_ts - window_seconds, end_ts]`, the exact averaging the published
+        `ResolutionSpec` (`2026-09-kxbtc15m-brti-60s`) uses at both open and close.
+        `now_ts` additionally drops readings not yet usable, so a caller can ask for the
+        *close* average from what is known so far (usually None until the window is
+        nearly over — the correct "outcome still open" signal).
+      - `build_features(...) -> SettlementWindowFeatures`: `reference_avg` (the FIXED
+        60 s open-window average — the level the close average must beat for YES),
+        `current_avg` / `last_value`, `seconds_remaining`, `fraction_elapsed`,
+        `drift_so_far` (= current − reference; positive favours YES), and
+        `realized_vol_per_sec` (std of 1-second-scaled BRTI log returns this window).
+        Consults only readings usable at/<= `now_ts`.
+      - `settlement_probability(features, vol_per_sec=None, drift_per_sec=0.0)`: the
+        BASELINE P(Δ >= 0) model — a Brownian-bridge-style approximation,
+        `Phi((drift_so_far + drift_per_sec·T) / (level·sigma_1s·sqrt(T)))`, tie-goes-to-
+        YES already satisfied by the `>=` boundary. Returns None when even this
+        baseline's inputs are missing (unknown drift, no vol estimate) — the strategy
+        must HOLD, never guess; returns exactly 1.0/0.0 at `seconds_remaining == 0`.
+        This is the number §4.4's trend features have to beat out-of-sample.
+      13 known-answer unit tests (`tests/unit/test_settlement_window.py`): trailing-60 s
+      mean, interval exclusion, `now_ts` usability cutoff, fixed reference average,
+      `drift_so_far` arithmetic, future-reading exclusion, missing-open-window → None,
+      the Phi(0)=0.5 symmetric case, a hand-computed normal-CDF value, the determined
+      zero-seconds case, and the no-volatility → None guard. Full suite 395 passed,
+      ruff + pyright clean, no new dependencies (`scipy.stats.norm` already in use).
 - [ ] 4.2 Build a train-fold-only calibrated probability baseline and persist model/version/input metadata with each estimate.
 - [ ] 4.3 Compare calibrated fair probability with side-specific executable prices and full expected friction before emitting a trade candidate.
 - [ ] 4.4 Reimplement trend and pullback features on short-horizon BRTI/perpetual data, and report their incremental out-of-sample value against the settlement-aware baseline.
