@@ -23,7 +23,7 @@ Contract (all four are validation requirements, not nice-to-haves):
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -102,13 +102,29 @@ class PollResult:
         }
 
 
-def _latest_observed_at(session: Session) -> int | None:
-    return session.scalar(select(func.max(BRTIObservation.observed_at)))
+def _format_value(value: float) -> str:
+    """Render an index value as a decimal string, keeping precision for
+    low-priced assets. BTC at ~$80k needs 2dp; DOGE at ~$0.09 needs ~8sf or
+    the reading is meaningless. `value_dollars` is a `String(32)`.
+    """
+    if value >= 1000:
+        return f"{value:.2f}"
+    if value >= 1:
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+    return f"{value:.10f}".rstrip("0").rstrip(".")
+
+
+def _latest_observed_at(session: Session, source_label: str) -> int | None:
+    return session.scalar(
+        select(func.max(BRTIObservation.observed_at)).where(
+            BRTIObservation.source == source_label
+        )
+    )
 
 
 def poll_brti(
     session: Session,
-    source: BRTISource,
+    sources: BRTISource | Sequence[BRTISource],
     *,
     interval_s: float,
     duration_s: float,
@@ -118,12 +134,18 @@ def poll_brti(
     sleep_fn: Callable[[float], None] = time.sleep,
     commit_every: int = 30,
 ) -> PollResult:
-    """Poll `source` every `interval_s` seconds for up to `duration_s`
-    seconds, persisting each new reading as a `BRTIObservation`.
+    """Poll one or more index `sources` every `interval_s` seconds for up to
+    `duration_s` seconds, persisting each new reading as a `BRTIObservation`.
+
+    Each source is polled once per tick. Dedup and gap accounting are
+    per-source (keyed by `source.name`): a stall on one index is that index's
+    gap, and resuming reads each index's own latest `observed_at`. A source
+    that raises or returns None is a skipped tick for that index only — the
+    others still get polled.
 
     `expected_gap_s` (default: 2.5 x `interval_s`) is the spacing above which
-    a jump between consecutive `observed_at` values is logged as a gap. Gaps
-    are only ever recorded — never backfilled.
+    a jump between consecutive `observed_at` values for one source is logged
+    as a gap. Gaps are only ever recorded — never backfilled.
 
     `now_fn` / `sleep_fn` are injectable so tests run without real time.
     """
@@ -132,15 +154,22 @@ def poll_brti(
     if duration_s <= 0:
         raise ValueError("duration_s must be positive")
     gap_threshold = expected_gap_s if expected_gap_s is not None else interval_s * 2.5
+    source_list = [sources] if isinstance(sources, BRTISource) else list(sources)
+    if not source_list:
+        raise ValueError("at least one source is required")
 
     result = PollResult()
-    prev_observed_at = _latest_observed_at(session)
-    if prev_observed_at is not None:
-        logger.info(
-            "brti poll resuming; last observed_at in table is {} — a long "
-            "silence before the first new reading will be recorded as a gap",
-            prev_observed_at,
-        )
+    prev_by_source: dict[str, int | None] = {}
+    for src in source_list:
+        prev = _latest_observed_at(session, src.name)
+        prev_by_source[src.name] = prev
+        if prev is not None:
+            logger.info(
+                "brti poll resuming for {}; last observed_at is {} — a long silence "
+                "before the first new reading is recorded as a gap",
+                src.name,
+                prev,
+            )
 
     start = now_fn()
     deadline = start + duration_s
@@ -148,61 +177,66 @@ def poll_brti(
     try:
         while now_fn() < deadline:
             tick_start = now_fn()
-            result.polls += 1
-            try:
-                reading = source.fetch()
-            except Exception as exc:  # a source hiccup must not kill the loop
-                result.errors += 1
-                logger.warning("brti source {} raised on fetch: {}", source.name, exc)
-                reading = None
+            for src in source_list:
+                result.polls += 1
+                try:
+                    reading = src.fetch()
+                except Exception as exc:  # one source's hiccup must not stop the rest
+                    result.errors += 1
+                    logger.warning("brti source {} raised on fetch: {}", src.name, exc)
+                    reading = None
 
-            if reading is None:
-                result.empty_ticks += 1
-            else:
+                if reading is None:
+                    result.empty_ticks += 1
+                    continue
+
                 receipt = round(now_fn())
-                available_at = (
-                    reading.available_at if reading.available_at is not None else receipt
+                available_at = max(
+                    reading.available_at if reading.available_at is not None else receipt,
+                    reading.observed_at,
                 )
-                # available_at can never precede observed_at.
-                available_at = max(available_at, reading.observed_at)
+                label = reading.source or src.name
+                prev_observed_at = prev_by_source.get(src.name)
 
                 if prev_observed_at is not None and reading.observed_at <= prev_observed_at:
                     result.duplicates_skipped += 1
-                else:
-                    if (
-                        prev_observed_at is not None
-                        and reading.observed_at - prev_observed_at > gap_threshold
-                    ):
-                        result.gaps_observed += 1
-                        logger.warning(
-                            "brti gap: {}s between observed_at {} and {} (threshold {}s) — "
-                            "recorded as a hole, not filled",
-                            reading.observed_at - prev_observed_at,
-                            prev_observed_at,
-                            reading.observed_at,
-                            gap_threshold,
-                        )
-                    session.add(
-                        BRTIObservation(
-                            observed_at=reading.observed_at,
-                            available_at=available_at,
-                            value_dollars=f"{reading.value:.2f}",
-                            source=reading.source or source.name,
-                            capture_session_id=session_id,
-                            source_endpoint=source.name,
-                            fetched_at=receipt,
-                            provenance={
-                                "operator_run": True,
-                                "poll_interval_s": interval_s,
-                                **reading.extra,
-                            },
-                        )
+                    continue
+
+                if (
+                    prev_observed_at is not None
+                    and reading.observed_at - prev_observed_at > gap_threshold
+                ):
+                    result.gaps_observed += 1
+                    logger.warning(
+                        "brti gap [{}]: {}s between observed_at {} and {} (threshold {}s) — "
+                        "recorded as a hole, not filled",
+                        label,
+                        reading.observed_at - prev_observed_at,
+                        prev_observed_at,
+                        reading.observed_at,
+                        gap_threshold,
                     )
-                    pending += 1
-                    result.persisted += 1
-                    result.first_observed_at = result.first_observed_at or reading.observed_at
-                    result.last_observed_at = reading.observed_at
-                    prev_observed_at = reading.observed_at
+                session.add(
+                    BRTIObservation(
+                        observed_at=reading.observed_at,
+                        available_at=available_at,
+                        value_dollars=_format_value(reading.value),
+                        source=label,
+                        capture_session_id=session_id,
+                        source_endpoint=src.name,
+                        fetched_at=receipt,
+                        provenance={
+                            "operator_run": True,
+                            "poll_interval_s": interval_s,
+                            **reading.extra,
+                        },
+                    )
+                )
+                pending += 1
+                result.persisted += 1
+                result.first_observed_at = result.first_observed_at or reading.observed_at
+                result.last_observed_at = reading.observed_at
+                prev_by_source[src.name] = reading.observed_at
 
             if pending >= commit_every:
                 session.commit()

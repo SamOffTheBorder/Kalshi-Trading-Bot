@@ -145,9 +145,25 @@ def _make_fake_brti_source() -> BRTISource:
     return CallableBRTISource(_fetch, name="fake:random-walk")
 
 
-def _resolve_brti_source(name: str) -> BRTISource:
+# CF Benchmarks Real-Time Index ids for the Kalshi crypto event series
+# (verified live through the passthrough 2026-09-07). BRTI is Bitcoin's; the
+# rest follow the <ASSET>USD_RTI convention.
+CRYPTO_RTI_INDICES = {
+    "BTC": "BRTI",
+    "ETH": "ETHUSD_RTI",
+    "SOL": "SOLUSD_RTI",
+    "XRP": "XRPUSD_RTI",
+    "DOGE": "DOGEUSD_RTI",
+    "BNB": "BNBUSD_RTI",
+    "HYPE": "HYPEUSD_RTI",
+    "NEAR": "NEARUSD_RTI",
+    "ZEC": "ZECUSD_RTI",
+}
+
+
+def _resolve_brti_sources(name: str, index_ids: list[str]) -> list[BRTISource]:
     if name == "fake":
-        return _make_fake_brti_source()
+        return [_make_fake_brti_source()]
     if name == "kalshi":
         settings = get_settings()
         key_id = settings.kalshi_key_id
@@ -163,11 +179,35 @@ def _resolve_brti_source(name: str) -> BRTISource:
                 f"--brti-source kalshi needs the RSA key at {key_path} "
                 "(kalshi_private_key_path). It is gitignored; restore it first."
             )
-        return KalshiBRTISource(
-            key_id=key_id.get_secret_value(),
-            private_key_path=key_path,
-        )
+        return [
+            KalshiBRTISource(
+                key_id=key_id.get_secret_value(),
+                private_key_path=key_path,
+                index_id=idx,
+            )
+            for idx in index_ids
+        ]
     raise SystemExit(f"--brti-source {name!r} is not a known source ({BRTI_SOURCES}).")
+
+
+def _parse_index_ids(raw: list[str] | None) -> list[str]:
+    """`--brti-index` accepts asset symbols (BTC, ETH), raw CF Benchmarks ids
+    (BRTI, SOLUSD_RTI), 'all', or a comma-list of those; repeatable."""
+    tokens: list[str] = []
+    for chunk in raw or ["BTC"]:
+        tokens.extend(t.strip() for t in chunk.split(",") if t.strip())
+    resolved: list[str] = []
+    for tok in tokens:
+        up = tok.upper()
+        if up == "ALL":
+            resolved.extend(CRYPTO_RTI_INDICES.values())
+        elif up in CRYPTO_RTI_INDICES:
+            resolved.append(CRYPTO_RTI_INDICES[up])
+        else:
+            resolved.append(tok)  # assume a raw CF Benchmarks id
+    # de-dupe, preserve order
+    seen: set[str] = set()
+    return [i for i in resolved if not (i in seen or seen.add(i))]
 
 
 def main() -> None:
@@ -188,6 +228,11 @@ def main() -> None:
         "--brti-source", choices=BRTI_SOURCES, default="kalshi",
         help="BRTI data source: 'kalshi' (real, authenticated CF Benchmarks passthrough) "
         "or 'fake' (synthetic, tests only)",
+    )
+    parser.add_argument(
+        "--brti-index", action="append", default=None,
+        help="index(es) to poll: asset symbol (BTC, ETH, SOL...), raw CF Benchmarks id "
+        "(BRTI, SOLUSD_RTI), 'all', or a comma-list. Repeatable. Default: BTC.",
     )
     parser.add_argument("--interval", type=float, default=60.0, help="BRTI poll interval, seconds")
     parser.add_argument(
@@ -211,14 +256,17 @@ def main() -> None:
                 period_minutes=args.period, max_markets=args.max_markets, session_id=session_id
             ))
         if args.poll_brti:
-            source = _resolve_brti_source(args.brti_source)
+            index_ids = _parse_index_ids(args.brti_index)
+            sources = _resolve_brti_sources(args.brti_source, index_ids)
             if args.brti_source == "fake":
                 print(
                     "WARNING: --brti-source fake is synthetic data. It is safe to "
                     "exercise the loop but MUST NOT be used for a validation run."
                 )
+            else:
+                print(f"polling {len(sources)} index feed(s): {', '.join(index_ids)}")
             result = poll_brti(
-                session, source,
+                session, sources,
                 interval_s=args.interval, duration_s=args.duration, session_id=session_id,
             )
             print("poll_brti=", json.dumps(result.as_dict(), sort_keys=True))

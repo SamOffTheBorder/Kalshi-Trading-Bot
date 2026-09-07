@@ -8,11 +8,16 @@ REM
 REM  Each cycle:
 REM    1. refresh the last ~3 days of KXBTC15M markets + 1-min contract candles
 REM       (Kalshi public API, unauthenticated)
-REM    2. poll the real BRTI index for ~6 hours via Kalshi's authenticated
-REM       CF Benchmarks passthrough (read-only market data; needs KALSHI_KEY_ID
-REM       and secrets\kalshi_private_key.pem), recording observed_at /
-REM       available_at honestly and logging -- never filling -- gaps
+REM    2. poll all nine CF Benchmarks crypto indices (BTC/ETH/SOL/XRP/DOGE/BNB/
+REM       HYPE/NEAR/ZEC) for ~6 hours via Kalshi's authenticated passthrough
+REM       (read-only market data; needs KALSHI_KEY_ID and
+REM       secrets\kalshi_private_key.pem), recording observed_at / available_at
+REM       honestly, per-index, and logging -- never filling -- gaps
 REM  then loops back to step 1.
+REM
+REM  Only BTC (BRTI) feeds the current KXBTC15M validation. The other eight
+REM  are captured now so ETH/SOL/... validation later doesn't start from zero.
+REM  To capture BTC only, change "--brti-index all" below to "--brti-index BTC".
 REM
 REM  This never schedules itself and never runs unattended. It is a foreground
 REM  window you start and stop by hand.
@@ -37,8 +42,8 @@ echo === %DATE% %TIME%  refreshing KXBTC15M contract data (last 3 days) ===
 uv run python scripts\capture_session.py --capture --start-ts %START% --end-ts %NOW%
 
 echo.
-echo === %DATE% %TIME%  polling real BRTI for ~6 hours (Ctrl+C to stop) ===
-uv run python scripts\capture_session.py --poll-brti --brti-source kalshi --interval 60 --duration 21600
+echo === %DATE% %TIME%  polling 9 CF Benchmarks crypto indices for ~6 hours (Ctrl+C to stop) ===
+uv run python scripts\capture_session.py --poll-brti --brti-source kalshi --brti-index all --interval 60 --duration 21600
 
 echo.
 echo === %DATE% %TIME%  cycle done -- gap report ===

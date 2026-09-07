@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from kalshi_bot.backtest.liveness import is_live_quote
@@ -67,6 +67,12 @@ from kalshi_bot.strategy.levels import SpotBar
 # the full 15-minute KXBTC15M lifetime, the 60 s reference average at the
 # window open, and the short-horizon trend lookback all fit inside 30 min.
 _BRTI_SLICE_WINDOW_S = 1_800
+
+# `BRTIObservation.source` labels that mean "the Bitcoin index" — used to
+# exclude other CF Benchmarks indices (ETHUSD_RTI, SOLUSD_RTI, ...) captured
+# into the same archive. The `%brti%` ilike also matches the historical
+# "brti" / "kalshi:cfbenchmarks/BRTI" tags.
+_BTC_BRTI_SOURCE_LABELS = ("brti", "BRTI", "kalshi:cfbenchmarks/BRTI")
 
 SERIES_SYMBOL = {
     "KXBTC": "BTC-USD",
@@ -200,18 +206,29 @@ class BacktestEngine:
         return values[idx] if idx >= 0 else None
 
     def _load_brti(self, start_ts: int, end_ts: int) -> tuple[list[int], tuple[BRTIReading, ...]]:
-        """Every `BRTIObservation` whose value could have been observed within
-        the run window, oldest first, as `signals.settlement_window.BRTIReading`
+        """`BRTIObservation` rows for the BITCOIN index within the run window,
+        oldest first, as `signals.settlement_window.BRTIReading`
         (kxbtc15m-validation-rebuild §4.1). Returned alongside a parallel list
         of `usable_at` timestamps so the per-evaluation slice is a bisect, not
         a scan. `value_dollars` is a decimal string in the schema; parsed to
         float here. A checkout with no BRTI rows yields an empty tuple and the
-        settlement strategy HOLDs on `no_brti_readings` — never a crash."""
+        settlement strategy HOLDs on `no_brti_readings` — never a crash.
+
+        The archive may hold other CF Benchmarks indices (ETHUSD_RTI etc.)
+        captured alongside BRTI; this filters to Bitcoin by `source` so a
+        KXBTC15M run never mixes another asset's index into the settlement
+        calculation. Historical rows predate the multi-index `source` label
+        and used the plain "brti" tag, so both are accepted."""
         rows = self.session.execute(
             select(BRTIObservation)
             .where(
                 BRTIObservation.observed_at >= start_ts - 3_600,
                 BRTIObservation.observed_at <= end_ts,
+                or_(
+                    BRTIObservation.source.is_(None),
+                    BRTIObservation.source.in_(_BTC_BRTI_SOURCE_LABELS),
+                    BRTIObservation.source.ilike("%brti%"),
+                ),
             )
             .order_by(BRTIObservation.available_at)
         ).scalars()

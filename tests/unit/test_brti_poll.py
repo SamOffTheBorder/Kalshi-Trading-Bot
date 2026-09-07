@@ -69,6 +69,16 @@ def test_persists_readings_with_causal_timestamps(session):
     assert result.gaps_observed == 0
 
 
+def test_low_priced_asset_keeps_precision():
+    from kalshi_bot.data.brti.poll import _format_value
+
+    assert _format_value(79_585.27) == "79585.27"
+    assert _format_value(2_499.11) == "2499.11"
+    assert _format_value(1.4123) == "1.4123"
+    assert _format_value(0.093412) == "0.093412"
+    assert float(_format_value(0.09341278)) == pytest.approx(0.09341278, rel=1e-6)
+
+
 def test_respects_source_available_at_when_provided(session):
     clock = _Clock()
     reading = BRTIReadingRaw(
@@ -131,11 +141,12 @@ def test_empty_ticks_do_not_persist_or_fabricate(session):
 
 
 def test_resume_after_restart_treats_prior_silence_as_a_gap(session):
-    # Simulate a prior capture session leaving a row well in the past.
+    # A prior capture of the SAME feed left a row well in the past. Resume
+    # keys on the source label, so the gap is attributed to this feed.
     session.add(
         BRTIObservation(
             observed_at=1_000_000, available_at=1_000_000, value_dollars="99000.00",
-            source="prev", capture_session_id="old",
+            source="s", capture_session_id="old",
         )
     )
     session.commit()
@@ -152,6 +163,27 @@ def test_resume_after_restart_treats_prior_silence_as_a_gap(session):
     assert result.persisted == 1
     assert result.gaps_observed == 1  # the 9000s silence across the restart
     assert result.first_observed_at == 1_009_000
+
+
+def test_resume_ignores_a_different_feeds_history(session):
+    """A prior row from another index must not count as this feed's silence."""
+    session.add(
+        BRTIObservation(
+            observed_at=1_000_000, available_at=1_000_000, value_dollars="42.00",
+            source="other-index", capture_session_id="old",
+        )
+    )
+    session.commit()
+
+    clock = _Clock(start=1_009_000.0)
+    seq = iter([BRTIReadingRaw(observed_at=1_009_000, value=101_000.0, source="s")])
+    src = CallableBRTISource(lambda: next(seq, None), name="s")
+    result = poll_brti(
+        session, src, interval_s=60, duration_s=90, session_id="new",
+        now_fn=clock.now, sleep_fn=clock.sleep, commit_every=1,
+    )
+    assert result.persisted == 1
+    assert result.gaps_observed == 0  # not this feed's gap
 
 
 def test_duplicate_or_stale_observed_at_is_skipped(session):
@@ -209,6 +241,63 @@ def test_interrupt_stops_cleanly(session):
         now_fn=clock.now, sleep_fn=clock.sleep, commit_every=1,
     )
     assert result.stopped_reason == "interrupted"
+
+
+def test_multiple_sources_each_persist_with_per_index_state(session):
+    clock = _Clock()
+    btc = iter(
+        [
+            BRTIReadingRaw(observed_at=1_000_000, value=100_000.0, source="BRTI"),
+            BRTIReadingRaw(observed_at=1_000_060, value=100_010.0, source="BRTI"),
+        ]
+    )
+    eth = iter(
+        [
+            BRTIReadingRaw(observed_at=1_000_000, value=2_500.0, source="ETHUSD_RTI"),
+            None,  # eth briefly unavailable on the 2nd tick
+        ]
+    )
+    src_btc = CallableBRTISource(lambda: next(btc, None), name="BRTI")
+    src_eth = CallableBRTISource(lambda: next(eth, None), name="ETHUSD_RTI")
+
+    result = poll_brti(
+        session, [src_btc, src_eth],
+        interval_s=60, duration_s=120, session_id="multi",
+        now_fn=clock.now, sleep_fn=clock.sleep, commit_every=1,
+    )
+
+    rows = _rows(session)
+    by_src: dict[str, list[int]] = {}
+    for r in rows:
+        by_src.setdefault(r.source, []).append(r.observed_at)
+    assert by_src["BRTI"] == [1_000_000, 1_000_060]
+    assert by_src["ETHUSD_RTI"] == [1_000_000]  # 2nd eth tick was empty
+    assert result.persisted == 3
+    assert result.empty_ticks == 1
+    assert result.polls == 4  # 2 ticks x 2 sources
+
+
+def test_one_bad_source_does_not_stop_the_others(session):
+    clock = _Clock()
+
+    def _bad() -> BRTIReadingRaw:
+        raise RuntimeError("index feed down")
+
+    good = iter([BRTIReadingRaw(observed_at=1_000_000, value=100_000.0, source="BRTI")])
+    src_good = CallableBRTISource(lambda: next(good, None), name="BRTI")
+    result = poll_brti(
+        session,
+        [CallableBRTISource(_bad, name="BAD"), src_good],
+        interval_s=60, duration_s=90, session_id="m",
+        now_fn=clock.now, sleep_fn=clock.sleep, commit_every=1,
+    )
+    assert result.errors >= 1
+    assert [r.source for r in _rows(session)] == ["BRTI"]
+
+
+def test_rejects_empty_source_list(session):
+    with pytest.raises(ValueError):
+        poll_brti(session, [], interval_s=60, duration_s=10, session_id="x")
 
 
 def test_rejects_bad_intervals(session):

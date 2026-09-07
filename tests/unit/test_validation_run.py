@@ -99,7 +99,8 @@ def _add_window(
                 observed_at=ts,
                 available_at=ts,
                 value_dollars=f"{value:.2f}",
-                source="synthetic",
+                # the engine's _load_brti filters to the Bitcoin index by source
+                source="kalshi:cfbenchmarks/BRTI",
             )
         )
 
