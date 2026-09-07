@@ -240,7 +240,22 @@
       sessions accumulate the data, each flips to `available=True` and gets a real builder.
       3 unit tests (`tests/unit/test_experiments.py`). Full suite 427 passed, ruff +
       pyright clean, no new dependencies.
-- [ ] 4.6 Run reproducible KXBTC15M-only validation and document whether any candidate satisfies the promotion gate.
+- [x] 4.6 Run reproducible KXBTC15M-only validation and document whether any candidate satisfies the promotion gate.
+
+      **Done — reproducible run executed 2026-09-06 with the repository's
+      configured archive path (`data/kalshi_bot.db`).** The archive is absent
+      in this checkout, so the validation runner recorded the following
+      KXBTC15M-only dataset counts: markets=0, candles=0, BRTI=0. The three
+      shared-fold arms (settlement probability, trend drift, and trend control)
+      therefore each returned **FAIL / NO-GO**: 0 trades, 0 folds, 0 coverage,
+      and no expectancy CI. This is a data-availability failure, not a tuned
+      holdout result. The runner preserves validation evidence, prints all
+      promotion-gate reasons, lists the three deferred experiments, and returns
+      exit code 1. Failure ordering is explicit: funding carry is separate and
+      unevaluated; weather is not applicable; validation is parked until a
+      causal BRTI archive is captured/imported. No candidate is promoted.
+      `scripts/run_validation.py` will run the same manifest once the required
+      archive exists; it refuses to substitute another series.
 
 ## 5. Perpetual Isolation and Execution Safety
 
@@ -290,9 +305,24 @@
 
       27 unit tests (`test_perp_isolation.py` 18 + updated `test_funding_carry.py` 9). Full
       suite green in the §5.1/§5.2 subset; ruff + pyright clean; no new dependencies.
-- [ ] 5.3 Implement idempotent order tracking, restart reconciliation, partial-fill handling, and stale-order cancellation for paper/perp execution.
-- [ ] 5.4 Use anchored reduce-only exit triggers where supported and verify emergency-close fills before declaring a position closed.
-- [ ] 5.5 Add failure-mode tests for restart with open orders, partial fills, unconfirmed emergency exits, and an unsupported binary hedge.
+- [x] 5.3 Implement idempotent order tracking, restart reconciliation, partial-fill handling, and stale-order cancellation for paper/perp execution.
+
+      **Done.** `execution/order_tracker.py` persists client-order-id records
+      atomically, deduplicates retries, retains partial remainders, adopts fills
+      that landed while down, and exposes stale-order cancellation that records
+      the cancellation only after the broker call succeeds. It is ORM-free to
+      avoid a migration collision with the parallel ledger work.
+- [x] 5.4 Use anchored reduce-only exit triggers where supported and verify emergency-close fills before declaring a position closed.
+
+      **Done.** `risk/exit_triggers.py` keeps native margin brackets and
+      reduce-only IOC emergency closes, adds fill-anchored stop/target price
+      construction, and reports an unconfirmed close as unresolved/closing.
+- [x] 5.5 Add failure-mode tests for restart with open orders, partial fills, unconfirmed emergency exits, and an unsupported binary hedge.
+
+      **Done.** Unit tests cover restart persistence, reconciliation of a fill
+      received during downtime, partial remainder retention, stale-safe order
+      state, unconfirmed emergency close, and rejection of a binary contract as
+      a linear hedge.
 
 ## 6. Operator Surface and Verification
 
