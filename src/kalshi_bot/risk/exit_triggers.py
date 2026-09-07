@@ -24,8 +24,9 @@ mandatory. This module is perps-only.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from loguru import logger
 
@@ -56,6 +57,7 @@ def attach_mandatory_bracket(
     close_side: Literal["bid", "ask"],
     close_count: str,
     marketable_close_price: str,
+    confirm_close: Callable[[dict[str, Any]], bool] | None = None,
 ) -> BracketResult:
     """Attach a stop-loss (and optional take-profit) bracket to a perps
     position that was just opened. On any failure, immediately submits a
@@ -98,6 +100,7 @@ def attach_mandatory_bracket(
             close_count=close_count,
             marketable_close_price=marketable_close_price,
             error=str(exc),
+            confirm_close=confirm_close,
         )
     logger.info(
         "attach_mandatory_bracket: bracket attached for {} ({}), stop={}, target={}",
@@ -117,9 +120,10 @@ def _close_after_failed_bracket(
     close_count: str,
     marketable_close_price: str,
     error: str,
+    confirm_close: Callable[[dict[str, Any]], bool] | None,
 ) -> BracketResult:
     try:
-        client.create_order(
+        response = client.create_order(
             market_ticker=ticker,
             side=close_side,
             count=close_count,
@@ -145,7 +149,44 @@ def _close_after_failed_bracket(
             closed_due_to_failure=False,
             error=f"bracket_error={error!r} close_error={close_exc!r}",
         )
+    confirmed = confirm_close(response) if confirm_close is not None else bool(
+        response.get("filled", False) or response.get("status") in {"filled", "executed"}
+    )
+    if not confirmed:
+        logger.critical(
+            "attach_mandatory_bracket: close order submitted but fill is unconfirmed for {}; "
+            "position remains CLOSING",
+            ticker,
+        )
+        return BracketResult(
+            ok=False, closed_due_to_failure=False, error=f"{error}; close_unconfirmed"
+        )
     return BracketResult(ok=False, closed_due_to_failure=True, error=error)
 
 
-__all__ = ["BracketResult", "PositionKind", "attach_mandatory_bracket"]
+def anchored_bracket_prices(
+    fill_price: float,
+    *,
+    stop_distance: float,
+    target_distance: float | None = None,
+    direction: Literal["long", "short"],
+) -> tuple[str, str | None]:
+    """Calculate server-bracket prices from the actual fill, never a quote."""
+    if fill_price <= 0 or stop_distance <= 0:
+        raise ValueError("fill_price and stop_distance must be positive")
+    if target_distance is not None and target_distance <= 0:
+        raise ValueError("target_distance must be positive")
+    sign = 1 if direction == "long" else -1
+    stop = fill_price - sign * stop_distance
+    target = None if target_distance is None else fill_price + sign * target_distance
+    if stop <= 0 or (target is not None and target <= 0):
+        raise ValueError("anchored exit price must be positive")
+    return f"{stop:.8f}", None if target is None else f"{target:.8f}"
+
+
+__all__ = [
+    "BracketResult",
+    "PositionKind",
+    "anchored_bracket_prices",
+    "attach_mandatory_bracket",
+]

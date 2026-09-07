@@ -71,7 +71,7 @@ def test_bracket_attach_failure_closes_position_immediately(private_key_path, mo
         calls.append((request.method, request.url.path))
         if request.method == "PUT":
             return httpx.Response(500, text="exit trigger service down")
-        return httpx.Response(200, json={"order_id": "close-1"})
+        return httpx.Response(200, json={"order_id": "close-1", "status": "executed"})
 
     client = _client_with(private_key_path, handler)
     result = attach_mandatory_bracket(
@@ -98,7 +98,7 @@ def test_closing_order_is_reduce_only_and_immediate(private_key_path, monkeypatc
         if request.method == "PUT":
             return httpx.Response(500, text="down")
         seen_body.update(json.loads(request.content))
-        return httpx.Response(200, json={"order_id": "close-1"})
+        return httpx.Response(200, json={"order_id": "close-1", "status": "executed"})
 
     client = _client_with(private_key_path, handler)
     attach_mandatory_bracket(
@@ -117,6 +117,28 @@ def test_closing_order_is_reduce_only_and_immediate(private_key_path, monkeypatc
     assert seen_body["count"] == "3"
     assert seen_body["price"] == "99999.00"
 
+
+def test_unconfirmed_emergency_close_stays_closing(private_key_path, monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    def handler(request):
+        if request.method == "PUT":
+            return httpx.Response(500, text="down")
+        return httpx.Response(200, json={"order_id": "close-1", "status": "resting"})
+
+    client = _client_with(private_key_path, handler)
+    result = attach_mandatory_bracket(
+        client,
+        ticker="KXBTCPERP",
+        position_kind="isolated",
+        stop_loss_price="49000.00",
+        close_side="ask",
+        close_count="1",
+        marketable_close_price="0.01",
+    )
+    assert result.ok is False
+    assert result.closed_due_to_failure is False
+    assert result.error is not None and "close_unconfirmed" in result.error
 
 def test_both_bracket_and_close_failing_reports_not_closed(private_key_path, monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)

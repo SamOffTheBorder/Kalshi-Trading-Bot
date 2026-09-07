@@ -6,6 +6,8 @@ from kalshi_bot.execution.broker_protocol import (
     OrderResult,
     Position,
 )
+from kalshi_bot.execution.order_tracker import OrderTracker, TrackedOrder
+from kalshi_bot.execution.safety import require_linear_hedge_instrument
 
 __all__ = [
     "BacktestBroker",
@@ -15,4 +17,7 @@ __all__ = [
     "OrderRequest",
     "OrderResult",
     "Position",
+    "OrderTracker",
+    "TrackedOrder",
+    "require_linear_hedge_instrument",
 ]
