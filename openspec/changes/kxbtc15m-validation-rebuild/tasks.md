@@ -244,8 +244,52 @@
 
 ## 5. Perpetual Isolation and Execution Safety
 
-- [ ] 5.1 Split perp strategy ledger, metrics, and promotion configuration from binary-event strategy reporting.
-- [ ] 5.2 Disable market-neutral funding-carry classification unless a compatible linear hedge, rebalance cadence, complete fees, funding, and residual risk are modeled.
+- [x] 5.1 Split perp strategy ledger, metrics, and promotion configuration from
+      binary-event strategy reporting.
+
+      **Done.** New `src/kalshi_bot/backtest/perp_ledger.py` — a standalone accounting +
+      reporting layer that deliberately does NOT import `backtest/report.py`,
+      `backtest/metrics.py`, or `promotion_gate.py` (design.md "SEPARATE ledger and
+      gate"): those speak binary settlement / Brier / win-rate, none of which apply to a
+      mark-to-market perp.
+      - `PerpFill`, `FundingEvent` (signed `payment_usd` from the account's view),
+        `PerpTrade` (gross = `size*(exit_mark-entry_mark)`, plus signed funding PnL, minus
+        both taker legs).
+      - `PerpLedgerMetrics` foregrounds what actually matters for a perp:
+        `min_distance_to_liquidation` (the single closest any trade came),
+        `max_leverage_used`, `n_liquidations`, `worst_trade_pnl_usd`, and
+        `funding_share_of_net` — a carry strategy whose net PnL is mostly PRICE move, not
+        funding, is mislabelled (feeds §5.2). It carries NO `win_rate` / `breakeven` /
+        `brier`.
+      - `PerpPromotionPolicy` / `evaluate_perp_promotion` — a SEPARATE gate: rejects any
+        liquidation regardless of PnL, rejects coming within 15% of liquidation, rejects
+        leverage over the 2x cap. Perps are enabled only after this gate AND the
+        event-contract gate both pass (design.md migration step 5).
+
+- [x] 5.2 Disable market-neutral funding-carry classification unless a compatible linear
+      hedge, rebalance cadence, complete fees, funding, and residual risk are modeled.
+
+      **Done.** New `src/kalshi_bot/strategy/funding_carry_classification.py`:
+      `classify_funding_carry(HedgeSpec)` is a pure predicate returning `DISABLED` (with
+      the specific reasons) whenever the hedge is a binary/event contract or anything
+      non-linear, OR any required model component is missing — rollover/rebalance cadence,
+      both legs' full fees, per-interval funding accrual, or an explicit residual
+      basis-risk estimate. `ELIGIBLE` only when the hedge is linear (spot / dated future /
+      perp), on the same reference index, and every component is present — and even then
+      promotion still needs `evaluate_perp_promotion` on real results (necessary, not
+      sufficient). `BINARY_EVENT_HEDGE` is the v2 prototype's approach, exported and
+      asserted `DISABLED`.
+
+      `strategy/funding_carry.py` now routes through it: `evaluate_funding_carry` takes a
+      `hedge: HedgeSpec` (default `BINARY_EVENT_HEDGE`), still computes the research carry
+      numbers, but returns `should_enter=False` / `market_neutral=False` /
+      `reason="hedge_not_linear_carry_disabled"` with `classification_reasons` whenever the
+      hedge is not `ELIGIBLE`. It only reports `market_neutral=True` for a fully-modelled
+      linear hedge. `test_favorable_carry_enters` updated to require an eligible hedge; new
+      tests cover the binary-hedge disabling and every missing-component reason.
+
+      27 unit tests (`test_perp_isolation.py` 18 + updated `test_funding_carry.py` 9). Full
+      suite green in the §5.1/§5.2 subset; ruff + pyright clean; no new dependencies.
 - [ ] 5.3 Implement idempotent order tracking, restart reconciliation, partial-fill handling, and stale-order cancellation for paper/perp execution.
 - [ ] 5.4 Use anchored reduce-only exit triggers where supported and verify emergency-close fills before declaring a position closed.
 - [ ] 5.5 Add failure-mode tests for restart with open orders, partial fills, unconfirmed emergency exits, and an unsupported binary hedge.

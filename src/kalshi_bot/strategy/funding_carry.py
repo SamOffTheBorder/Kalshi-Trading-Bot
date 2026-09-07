@@ -52,6 +52,11 @@ from typing import Literal
 
 from kalshi_bot.risk.funding_awareness import FundingState
 from kalshi_bot.signals.fees import TAKER_FEE_COEFFICIENT, entry_fee_rate_at_price
+from kalshi_bot.strategy.funding_carry_classification import (
+    BINARY_EVENT_HEDGE,
+    HedgeSpec,
+    classify_funding_carry,
+)
 
 PerpSide = Literal["long", "short"]
 
@@ -87,6 +92,13 @@ class FundingCarryDecision:
     expected_funding_usd: float | None = None
     hedge_cost_usd: float | None = None
     expected_net_carry_usd: float | None = None
+    market_neutral: bool = False
+    """True ONLY when the supplied hedge passes `classify_funding_carry`
+    (kxbtc15m-validation-rebuild §5.2). With the default binary-event hedge
+    this is always False — the position is a directional perp bet with a
+    funding kicker, not market-neutral carry, and must not be promoted as
+    carry."""
+    classification_reasons: tuple[str, ...] = ()
 
 
 def evaluate_funding_carry(
@@ -94,19 +106,35 @@ def evaluate_funding_carry(
     *,
     position_notional_usd: float,
     config: FundingCarryConfig | None = None,
+    hedge: HedgeSpec | None = None,
 ) -> FundingCarryDecision:
     """Decide whether to open a funding-carry position sized at
     `position_notional_usd` (the perp leg's notional; the hedge leg is sized
     to offset that notional's directional exposure — sizing the hedge leg's
     CONTRACT COUNT from notional is the caller's job, since it depends on
     the specific event contract chosen, not this function's).
+
+    `hedge` describes the instrument used to neutralise the perp leg's
+    directional exposure. It defaults to `BINARY_EVENT_HEDGE` — the v2
+    prototype's approach — which `classify_funding_carry` DISABLES: a binary
+    event contract is not a linear hedge (design.md §5.2). When the hedge
+    does not classify as ELIGIBLE, this function still computes the expected
+    carry numbers for research, but returns `should_enter=False` and
+    `market_neutral=False`: the position is not opened AS carry.
     """
     cfg = config or FundingCarryConfig()
+    hedge = hedge or BINARY_EVENT_HEDGE
+    classification = classify_funding_carry(hedge)
     if cfg.hedge_contract_cost_dollars <= 0:
         raise ValueError("hedge_contract_cost_dollars must be positive")
 
     if abs(funding_state.funding_rate) < cfg.min_funding_rate_abs:
-        return FundingCarryDecision(should_enter=False, reason="funding_rate_too_small")
+        return FundingCarryDecision(
+            should_enter=False,
+            reason="funding_rate_too_small",
+            market_neutral=classification.eligible,
+            classification_reasons=classification.reasons,
+        )
 
     # Take the side that RECEIVES: funding_state was computed for a specific
     # side already, but the carry strategy is free to choose either side of
@@ -137,6 +165,23 @@ def evaluate_funding_carry(
             expected_funding_usd=expected_funding_usd,
             hedge_cost_usd=hedge_cost_usd,
             expected_net_carry_usd=expected_net_carry_usd,
+            market_neutral=classification.eligible,
+            classification_reasons=classification.reasons,
+        )
+
+    if not classification.eligible:
+        # The carry numbers look favourable, but the hedge is not a
+        # compatible linear hedge — so this is NOT market-neutral carry
+        # (design.md §5.2). Do not open it as carry; surface why.
+        return FundingCarryDecision(
+            should_enter=False,
+            reason="hedge_not_linear_carry_disabled",
+            perp_side=perp_side,
+            expected_funding_usd=expected_funding_usd,
+            hedge_cost_usd=hedge_cost_usd,
+            expected_net_carry_usd=expected_net_carry_usd,
+            market_neutral=False,
+            classification_reasons=classification.reasons,
         )
 
     return FundingCarryDecision(
@@ -146,6 +191,8 @@ def evaluate_funding_carry(
         expected_funding_usd=expected_funding_usd,
         hedge_cost_usd=hedge_cost_usd,
         expected_net_carry_usd=expected_net_carry_usd,
+        market_neutral=True,
+        classification_reasons=(),
     )
 
 
