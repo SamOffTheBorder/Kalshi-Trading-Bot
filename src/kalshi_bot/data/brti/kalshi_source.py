@@ -120,15 +120,15 @@ class KalshiBRTISource:
 
 
 def _parse_values_payload(body: object, *, source: str) -> BRTIReadingRaw | None:
-    """Pull one reading out of the passthrough response.
+    """Pull the LATEST reading out of the passthrough response.
 
-    Shape (per the Kalshi + CF Benchmarks docs):
+    The observed live shape (2026-09-07) is a rolling ascending window:
         {"data": {"serverTime": "...ISO...",
-                  "payload": {"type": "value", "id": "BRTI",
-                              "time": <ms>, "value": "<price>"}}}
-    Some CF Benchmarks responses nest the value list differently; this walks
-    the common shapes and returns None (a skipped tick) rather than raising if
-    none match.
+                  "payload": [ {"value": "<price>", "time": <ms>}, ... ]}}
+    with `time` at second precision. The docs also describe a single-object
+    `payload` ({"type":"value","id":"BRTI","time":<ms>,"value":"<price>"}) and
+    a `{"values": [...]}` nesting. All three are handled; anything else returns
+    None (a skipped tick) rather than raising.
     """
     if not isinstance(body, dict):
         return None
@@ -141,13 +141,13 @@ def _parse_values_payload(body: object, *, source: str) -> BRTIReadingRaw | None
     if isinstance(payload, dict):
         if "value" in payload and ("time" in payload or "timestamp" in payload):
             candidates.append(payload)
-        # e.g. {"payload": {"values": [ {..}, {..} ]}}
         vals = payload.get("values")
         if isinstance(vals, list):
             candidates.extend(v for v in vals if isinstance(v, dict))
     if isinstance(payload, list):
         candidates.extend(v for v in payload if isinstance(v, dict))
 
+    best: tuple[int, float, dict[str, object]] | None = None
     for item in candidates:
         raw_value = item.get("value")
         raw_time = item.get("time", item.get("timestamp"))
@@ -162,14 +162,20 @@ def _parse_values_payload(body: object, *, source: str) -> BRTIReadingRaw | None
             continue
         if value <= 0:
             continue
-        return BRTIReadingRaw(
-            observed_at=observed_ms // 1000,
-            value=value,
-            source=source,
-            available_at=None,  # poll_brti stamps local receipt time
-            extra={"index_id": str(item.get("id", "")), "observed_at_ms": observed_ms},
-        )
-    return None
+        # payload is a window; keep the most recent reading in it.
+        if best is None or observed_ms > best[0]:
+            best = (observed_ms, value, item)
+
+    if best is None:
+        return None
+    observed_ms, value, item = best
+    return BRTIReadingRaw(
+        observed_at=observed_ms // 1000,
+        value=value,
+        source=source,
+        available_at=None,  # poll_brti stamps local receipt time
+        extra={"index_id": str(item.get("id", "")), "observed_at_ms": observed_ms},
+    )
 
 
 __all__ = ["PASSTHROUGH_BASE_URL", "SIGNING_PATH", "VALUES_PATH", "KalshiBRTISource"]

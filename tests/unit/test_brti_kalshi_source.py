@@ -52,6 +52,25 @@ def test_parses_values_list_shape():
     assert reading.value == pytest.approx(111300.0)
 
 
+def test_list_payload_returns_the_latest_reading():
+    """The live passthrough returns a rolling ascending window; take the most
+    recent entry, not the first."""
+    body = {
+        "data": {
+            "serverTime": "2026-09-07T07:12:34.014Z",
+            "payload": [
+                {"value": "79788.93", "time": 1_788_761_556_000},
+                {"value": "79788.32", "time": 1_788_761_557_000},
+                {"value": "79789.53", "time": 1_788_761_565_000},
+            ],
+        }
+    }
+    reading = _parse_values_payload(body, source="s")
+    assert reading is not None
+    assert reading.observed_at == 1_788_761_565
+    assert reading.value == pytest.approx(79789.53)
+
+
 @pytest.mark.parametrize(
     "body",
     [
