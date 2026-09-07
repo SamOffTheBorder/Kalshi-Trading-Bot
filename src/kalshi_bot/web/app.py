@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
             equity = (
                 queries.equity_curve(session, run.id, settings.bankroll_total_usd) if run else []
             )
+            validation = queries.latest_validation_status(session)
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -72,6 +73,7 @@ def create_app() -> FastAPI:
                 "signals": signals,
                 "coverage": coverage,
                 "equity": equity,
+                "validation": validation,
                 "paper_trading": settings.paper_trading,
             },
         )

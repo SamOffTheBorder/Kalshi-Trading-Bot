@@ -67,3 +67,14 @@ pre { white-space: pre-wrap; font-size: 12px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .dot-live { background: var(--green); }
 .dot-stopped { background: var(--muted); }
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.badge-ok { background: var(--green); color: #06231a; }
+.badge-warn { background: #6b5a00; color: #ffe9a8; }
+.badge-fail { background: var(--red); color: #2a0708; }

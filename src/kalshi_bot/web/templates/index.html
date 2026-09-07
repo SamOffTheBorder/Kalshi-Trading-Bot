@@ -19,6 +19,48 @@
 </section>
 
 <section class="panel">
+  <h2>Validation status</h2>
+  <table class="compact">
+    <tbody>
+      <tr><th>Run</th><td>{% if validation.run_id %}#{{ validation.run_id }} — {{ validation.strategy_name }}{% else %}— no runs yet{% endif %}</td></tr>
+      <tr><th>Evidence class</th>
+        <td>
+          {% if validation.evidence_class == "validation" %}
+            <span class="badge badge-ok">validation</span>
+          {% elif validation.evidence_class %}
+            <span class="badge badge-warn">{{ validation.evidence_class }}</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      <tr><th>Instrument scope</th><td>{{ validation.instrument_scope }}</td></tr>
+      <tr><th>Data window</th>
+        <td>{% if validation.data_start_ts %}{{ validation.data_start_ts }} &ndash; {{ validation.data_end_ts }}{% else %}—{% endif %}</td>
+      </tr>
+      <tr><th>Fee config</th><td>{{ validation.fee_config_version or "—" }}</td></tr>
+      <tr><th>Resolution config</th><td>{{ validation.resolution_config_version or "—" }}</td></tr>
+      <tr><th>Calibrator</th><td>{{ validation.calibrator_version or "—" }}</td></tr>
+      <tr><th>Promotion</th>
+        <td>
+          {% if validation.promotion_status == "passed" %}
+            <span class="badge badge-ok">PASSED</span>
+          {% elif validation.promotion_status == "failed" %}
+            <span class="badge badge-fail">FAILED</span>
+          {% elif validation.promotion_status == "not_evaluated" %}
+            <span class="badge badge-warn">not evaluated</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  {% if validation.promotion_reasons %}
+    <p class="muted">Blocking reasons:</p>
+    <ul class="muted">
+      {% for r in validation.promotion_reasons %}<li>{{ r }}</li>{% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+<section class="panel">
   <h2>Latest backtest run</h2>
   {% if run %}
     <p><strong>{{ run.strategy_name }}</strong> — run #{{ run.id }}, {{ run.status }}</p>
@@ -82,16 +124,20 @@
 <section class="panel">
   <h2>Live positions / orders / brackets / funding / liquidation distance</h2>
   <p class="placeholder">
-    Not available yet — these require the authenticated Kalshi client (§4),
-    risk layer (§5), and strategies (§6) which have not been built. This panel
-    is wired and will populate once those exist; it is not faking data.
+    No live-trading process is running. The authenticated client, risk layer,
+    settlement-aware strategy, and perp ledger now exist, but nothing is
+    executing against them yet — paper trading (§10) has not been started.
+    This panel populates once a paper/live run is active; it does not fake
+    data. Unresolved execution state (open orders recovered on restart,
+    unconfirmed emergency closes) surfaces here when there is a run to report.
   </p>
 </section>
 
 <section class="panel">
   <h2>AI commentary</h2>
   <p class="placeholder">
-    Not available yet — the AI layer (§7) has not been built.
+    The local veto model (§7.1) and forecast interface (§7.2) exist; per-trade
+    verdicts appear here once a paper/live run records them.
   </p>
 </section>
 

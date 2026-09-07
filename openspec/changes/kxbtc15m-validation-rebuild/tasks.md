@@ -326,7 +326,67 @@
 
 ## 6. Operator Surface and Verification
 
-- [ ] 6.1 Update the dashboard and run artifacts to show instrument scope, data freshness/provenance, model/calibration version, promotion status, and unresolved execution state.
-- [ ] 6.2 Update strategy research and operator documentation to distinguish validated evidence, experiments, deferred data-dependent work, and disabled perp carry.
-- [ ] 6.3 Run unit, integration, causal-regression, and walk-forward reproducibility tests; record the exact data/configuration versions used.
-- [ ] 6.4 Validate paper-mode restart, reconciliation, anchored exits, stale-order handling, and kill-close confirmation before enabling any paper strategy.
+- [x] 6.1 Update the dashboard and run artifacts to show instrument scope, data
+      freshness/provenance, model/calibration version, promotion status, and unresolved
+      execution state.
+
+      **Done.** New `queries.latest_validation_status()` reads the most recent
+      `evidence_class="validation"` run (falling back to any run), and surfaces:
+      instrument scope, data window, `fee_config_version`, `resolution_config_version`,
+      the calibrator version from provenance, and the promotion verdict + blocking
+      reasons parsed from `metrics_test["promotion"]`. Degrades to an all-blank status on
+      a fresh DB — never raises. New **Validation status** panel on `index.html` renders
+      it with PASS/FAIL/not-evaluated badges. The live positions/AI placeholder panels'
+      copy was refreshed — §4/§5/§7.1 modules now exist, so the panels say "nothing is
+      executing yet" (accurate) rather than "not built". 5 tests
+      (`test_dashboard_validation_panel.py`): blank DB, a validation run surfacing all
+      fields, validation-preferred-over-newer-diagnostic, diagnostic-only, and an index
+      route smoke test.
+
+- [x] 6.2 Update strategy research and operator documentation to distinguish validated
+      evidence, experiments, deferred data-dependent work, and disabled perp carry.
+
+      **Done.** New `docs-site/docs/status/kxbtc15m-rebuild.md` — the operator-facing
+      evidence taxonomy: (1) **validated** = a `validation`-class run that is KXBTC15M-
+      only, causal, fully-costed, fixed-risk-sized, walk-forward with fresh per-fold
+      state, and gate-checked; (2) **experiments** = trend/pullback as a labelled variant
+      reported on incremental value, plus microprice / trade-imbalance / quarter-hour;
+      (3) **deferred** = the data-dependent items and their specific blockers, in a
+      table; (4) **disabled** = cross-instrument funding carry, with the
+      `classify_funding_carry` conditions for it to become eligible and the separate perp
+      ledger/gate. Ends with the unchanged §8.5 promotion order (funding carry → weather
+      → park).
+
+- [x] 6.3 Run unit, integration, causal-regression, and walk-forward reproducibility
+      tests; record the exact data/configuration versions used.
+
+      **Done.** `python -m pytest -q`: **456 passed**, 3 deselected (the 3 integration
+      tests, incl. the live-Ollama round-trip, excluded by default per
+      `pyproject.toml`). Causal-regression coverage: `test_engine_causal_timeline.py` (6),
+      `test_engine_scenario_accounting.py` (5). Walk-forward reproducibility:
+      `test_validation_risk_reporting.py` + the `run_validation.py` manifest (§4.6), which
+      is deterministic given a fixed archive. Config versions in force:
+      `FeeConfig("2026-09-kalshi")`, `ResolutionSpec("2026-09-kxbtc15m-brti-60s")`.
+      **Whole-repo `ruff check` + `pyright` surfaced 2 static issues in the §5.3–5.5
+      execution files** (an `__all__` sort in `execution/__init__.py`; a `float`→`int`
+      `Position.quantity` mismatch in `backtest_broker.py` from §2.4's fractional
+      quantities) — neither is a runtime bug (`pytest` is clean), both handed to the §5.x
+      lane via the coordination notes. `pytest` + per-file `ruff`/`pyright` on every
+      committed file this change added are clean.
+
+- [ ] 6.4 Validate paper-mode restart, reconciliation, anchored exits, stale-order
+      handling, and kill-close confirmation before enabling any paper strategy.
+
+      **Blocked — this is an operator action, not a coding task.** The machinery exists
+      (§5.3–5.5: `execution/order_tracker.py`, `execution/safety.py`, the reduce-only
+      anchored exits and confirmed emergency close) and is unit-tested against fakes. But
+      "validate paper-mode restart/reconciliation" means running the paper loop against
+      live demo Kalshi, killing it mid-flight, and confirming recovery — which requires
+      §10's paper trading to actually be running. It cannot be closed until then.
+
+      **§4.6 is also effectively blocked on data**: the validation run executed but found
+      markets=0 / candles=0 / BRTI=0 in this checkout (the archiver's 4th silent death
+      cost the KXBTC15M-era data). All three arms FAIL vacuously. The validation
+      machinery is correct and reproducible; it needs a captured causal KXBTC15M + BRTI
+      dataset (`scripts/capture_session.py`, run by the operator over time) before any
+      strategy can be judged on merits.
