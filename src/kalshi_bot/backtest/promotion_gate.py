@@ -59,8 +59,14 @@ def enforce_paper_promotion(
     report: AggregateReport, policy: PromotionPolicy | None = None
 ) -> AggregateReport:
     decision = evaluate_promotion(report, policy)
-    return AggregateReport(**{**report.to_dict(), "folds": report.folds,
-                              "promotion_status": "passed" if decision.passed else "failed"})
+    return AggregateReport(
+        **{
+            **report.to_dict(),
+            "folds": report.folds,
+            "promotion_status": "passed" if decision.passed else "failed",
+            "promotion_reasons": decision.reasons,
+        }
+    )
 
 
 __all__ = [

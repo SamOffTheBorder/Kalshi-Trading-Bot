@@ -1,6 +1,7 @@
 import pytest
 
 from kalshi_bot.backtest.metrics import brier_score, day_block_bootstrap_ci, trade_economics
+from kalshi_bot.backtest.promotion_gate import enforce_paper_promotion
 from kalshi_bot.backtest.report import (
     aggregate_reports,
     build_fold_report,
@@ -53,6 +54,9 @@ def test_report_aggregates_realized_costs_and_gate_defaults_to_failure():
     report = aggregate_reports([fold])
     assert report.realized_cost_usd == 0.02
     assert report.promotion_status == "not_evaluated"
+    gated = enforce_paper_promotion(report)
+    assert gated.promotion_status == "failed"
+    assert gated.promotion_reasons
 
 
 def test_report_exposes_stability_and_outage_sensitivity():

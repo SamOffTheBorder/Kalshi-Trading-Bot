@@ -47,6 +47,7 @@ class AggregateReport:
     cancels: int
     partial_fills: int
     promotion_status: str = "not_evaluated"
+    promotion_reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
