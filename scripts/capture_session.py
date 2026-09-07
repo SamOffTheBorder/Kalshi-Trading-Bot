@@ -1,8 +1,17 @@
 """Deliberate foreground capture/import for KXBTC15M validation data.
 
-This command never schedules itself. ``--import-jsonl`` accepts operator-exported
-observations with the schema of the corresponding storage table. Kalshi market
-and candle capture uses only the unauthenticated public client.
+This command never schedules itself and never runs unattended.
+
+- ``--import-jsonl`` ingests operator-exported observations with the schema of
+  the corresponding storage table.
+- ``--capture`` pulls KXBTC15M market + contract-candle history from the
+  unauthenticated Kalshi public client.
+- ``--poll-brti`` runs a FOREGROUND BRTI polling loop (Ctrl+C or ``--duration``
+  stops it) that records `observed_at` / `available_at` honestly and logs —
+  never fills — gaps. The concrete data source is chosen with ``--brti-source``;
+  until an operator picks the real endpoint, only ``fake`` (a synthetic random
+  walk, for wiring/tests) is implemented.
+- ``--report`` prints gap analysis for every observation kind.
 """
 
 from __future__ import annotations
@@ -10,6 +19,8 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
+import random
 import sys
 import time
 import uuid
@@ -20,6 +31,12 @@ from sqlalchemy import select
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from kalshi_bot.data.brti import (  # noqa: E402
+    BRTIReadingRaw,
+    BRTISource,
+    CallableBRTISource,
+    poll_brti,
+)
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
 from kalshi_bot.data.kalshi.parse import parse_candle, parse_market  # noqa: E402
 from kalshi_bot.storage import (  # noqa: E402
@@ -34,6 +51,7 @@ from kalshi_bot.storage import (  # noqa: E402
 )
 
 KINDS = {"brti": BRTIObservation, "l2": OrderBookSnapshot, "trade": PublicTrade}
+BRTI_SOURCES = ("fake",)
 
 
 def import_jsonl(session, path: Path, kind: str, session_id: str) -> int:
@@ -102,6 +120,35 @@ def capture_kxbtc15m(session, *, start_ts: int, end_ts: int, period_minutes: int
     return markets, candles
 
 
+def _make_fake_brti_source() -> BRTISource:
+    """A synthetic BRTI random walk around $100k. For wiring and tests ONLY —
+    it is not real index data and must never feed a validation run. The real
+    source (CF Benchmarks real-time API, a licensed historical export, or a
+    Kalshi index endpoint) is an unmade operator decision."""
+    state = {"value": 100_000.0}
+
+    def _fetch() -> BRTIReadingRaw:
+        state["value"] *= math.exp(random.gauss(0.0, 0.0002))
+        return BRTIReadingRaw(
+            observed_at=int(time.time()),
+            value=state["value"],
+            source="fake:random-walk",
+            extra={"synthetic": True},
+        )
+
+    return CallableBRTISource(_fetch, name="fake:random-walk")
+
+
+def _resolve_brti_source(name: str) -> BRTISource:
+    if name == "fake":
+        return _make_fake_brti_source()
+    raise SystemExit(
+        f"--brti-source {name!r} is not implemented. Only {BRTI_SOURCES} exist "
+        "today; the real BRTI endpoint has not been chosen. See "
+        "docs-site/docs/status/kxbtc15m-rebuild.md."
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--import-jsonl", type=Path)
@@ -112,6 +159,19 @@ def main() -> None:
     parser.add_argument("--period", type=int, default=1)
     parser.add_argument("--max-markets", type=int, default=0)
     parser.add_argument("--report", action="store_true")
+    parser.add_argument(
+        "--poll-brti", action="store_true",
+        help="run a foreground BRTI polling loop (Ctrl+C or --duration stops it)",
+    )
+    parser.add_argument(
+        "--brti-source", choices=BRTI_SOURCES, default="fake",
+        help="BRTI data source; only 'fake' (synthetic) exists until the real endpoint is chosen",
+    )
+    parser.add_argument("--interval", type=float, default=60.0, help="BRTI poll interval, seconds")
+    parser.add_argument(
+        "--duration", type=float, default=3600.0,
+        help="how long the BRTI poll runs, seconds (it does not restart itself)",
+    )
     args = parser.parse_args()
     if args.import_jsonl and not args.kind:
         parser.error("--kind is required with --import-jsonl")
@@ -128,6 +188,18 @@ def main() -> None:
                 session, start_ts=args.start_ts, end_ts=args.end_ts,
                 period_minutes=args.period, max_markets=args.max_markets, session_id=session_id
             ))
+        if args.poll_brti:
+            source = _resolve_brti_source(args.brti_source)
+            if args.brti_source == "fake":
+                print(
+                    "WARNING: --brti-source fake is synthetic data. It is safe to "
+                    "exercise the loop but MUST NOT be used for a validation run."
+                )
+            result = poll_brti(
+                session, source,
+                interval_s=args.interval, duration_s=args.duration, session_id=session_id,
+            )
+            print("poll_brti=", json.dumps(result.as_dict(), sort_keys=True))
         if args.report:
             for kind in KINDS:
                 print(json.dumps(gap_report(session, kind), sort_keys=True))
