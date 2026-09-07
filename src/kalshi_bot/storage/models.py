@@ -242,6 +242,90 @@ class BRTIObservation(Base):
     provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
+class PerpMarkObservation(Base):
+    """One foreground snapshot of a Kalshi crypto perpetual's marks.
+
+    Captured live by `kalshi_bot.data.perps.poll_perp_marks` — the perp
+    analogue of `BRTIObservation`. Kalshi does NOT publish a historical
+    mark-price series, so (unlike funding) these can only be gathered by
+    polling `GET /margin/markets/{ticker}` in a foreground loop and are
+    subject to the same causal discipline: `observed_at` is the exchange's
+    own `settlement_mark_price.ts_ms` (seconds), `available_at` is local
+    receipt time, gaps are recorded and never filled.
+
+    All price columns are Kalshi fixed-point dollar *strings* PER CONTRACT
+    (a BTC perp contract is 0.0001 BTC), kept verbatim to avoid float drift;
+    `contract_size` is stored so a caller can convert to per-unit-of-index.
+    """
+
+    __tablename__ = "perp_mark_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_ticker", "observed_at", name="uq_perp_mark_ticker_observed"
+        ),
+        Index("ix_perp_mark_ticker_available", "market_ticker", "available_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)  # epoch seconds
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    settlement_mark_dollars: Mapped[str] = mapped_column(String(32), nullable=False)
+    reference_price_dollars: Mapped[str | None] = mapped_column(String(32))
+    liquidation_mark_dollars: Mapped[str | None] = mapped_column(String(32))
+    bid_dollars: Mapped[str | None] = mapped_column(String(32))
+    ask_dollars: Mapped[str | None] = mapped_column(String(32))
+    contract_size: Mapped[str | None] = mapped_column(String(32))
+    open_interest: Mapped[str | None] = mapped_column(String(32))
+    leverage_estimate: Mapped[float | None] = mapped_column(Float)
+
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PerpFundingObservation(Base):
+    """One realized 8-hourly funding settlement for a Kalshi crypto perp.
+
+    Unlike the mark price, Kalshi DOES serve funding history
+    (`GET /margin/funding_rates/historical`), so this table is populated by a
+    one-shot idempotent backfill (`kalshi_bot.data.perps.backfill_funding`)
+    rather than a poll loop. `funding_rate` is a plain float (it is legitimately
+    exactly 0 in many intervals); `mark_price_dollars` is the per-contract
+    dollar string Kalshi reports alongside it.
+
+    `observed_at` is the funding settlement instant (`funding_time`).
+    `available_at` equals `observed_at`: a realized funding rate is knowable
+    exactly at settlement, and the backfill does not fabricate an earlier
+    availability it cannot support.
+    """
+
+    __tablename__ = "perp_funding_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_ticker", "observed_at", name="uq_perp_funding_ticker_observed"
+        ),
+        Index("ix_perp_funding_ticker_observed", "market_ticker", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)  # settlement epoch s
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    funding_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    mark_price_dollars: Mapped[str | None] = mapped_column(String(32))
+
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
 class CryptoRegistrySnapshot(Base):
     """Immutable registry/configuration snapshot used for audit and replay."""
 

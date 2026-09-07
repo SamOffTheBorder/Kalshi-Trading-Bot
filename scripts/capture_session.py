@@ -15,6 +15,13 @@ This command never schedules itself and never runs unattended.
       uses.
     * ``fake`` — a synthetic random walk, for wiring and tests only. Prints a
       loud warning and MUST NOT feed a validation run.
+- ``--backfill-funding`` does a one-shot idempotent pull of Kalshi crypto-perp
+  funding history (``/margin/funding_rates/historical`` — read-only,
+  authenticated). Funding IS backfillable, so this is not a poll.
+- ``--poll-perp-marks`` runs a FOREGROUND loop over ``/margin/markets``
+  (read-only, authenticated) recording each crypto perp's settlement mark with
+  honest ``observed_at`` / ``available_at`` and logged — never filled — gaps.
+  Kalshi publishes no historical mark series, so a live poll is the only way.
 - ``--report`` prints gap analysis for every observation kind.
 """
 
@@ -45,19 +52,38 @@ from kalshi_bot.data.brti import (  # noqa: E402
 )
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
 from kalshi_bot.data.kalshi.parse import parse_candle, parse_market  # noqa: E402
+from kalshi_bot.data.perps import (  # noqa: E402
+    KalshiPerpMarkSource,
+    backfill_funding,
+    poll_perp_marks,
+    resolve_crypto_perp_tickers,
+)
 from kalshi_bot.storage import (  # noqa: E402
     BRTIObservation,
     Candle,
     KalshiMarket,
     OrderBookSnapshot,
+    PerpFundingObservation,
+    PerpMarkObservation,
     PublicTrade,
     create_all_tables,
     get_engine,
     get_session_factory,
 )
 
-KINDS = {"brti": BRTIObservation, "l2": OrderBookSnapshot, "trade": PublicTrade}
+KINDS = {
+    "brti": BRTIObservation,
+    "l2": OrderBookSnapshot,
+    "trade": PublicTrade,
+    "perp_mark": PerpMarkObservation,
+    "perp_funding": PerpFundingObservation,
+}
 BRTI_SOURCES = ("kalshi", "fake")
+
+# Asset symbols whose Kalshi crypto perps we capture by default — the nine
+# registry crypto assets. `resolve_crypto_perp_tickers` maps these to live
+# KX<ASSET>PERP tickers (and silently drops any the exchange isn't listing).
+DEFAULT_PERP_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "HYPE", "NEAR", "ZEC")
 
 
 def import_jsonl(session, path: Path, kind: str, session_id: str) -> int:
@@ -79,9 +105,38 @@ def import_jsonl(session, path: Path, kind: str, session_id: str) -> int:
 
 
 def gap_report(session, kind: str, *, period_seconds: int | None = None) -> dict[str, object]:
-    """Summarize first/last timestamps, gaps, and capture sessions."""
+    """Summarize first/last timestamps, gaps, and capture sessions.
+
+    For the per-market perp kinds (``perp_mark``, ``perp_funding``) each
+    market's series is reported separately so one perp's stall isn't read as
+    a gap in another's.
+    """
     model = KINDS[kind]
     rows = session.execute(select(model).order_by(model.observed_at)).scalars().all()
+    if kind in ("perp_mark", "perp_funding"):
+        by_ticker: dict[str, list[int]] = {}
+        for r in rows:
+            by_ticker.setdefault(r.market_ticker, []).append(r.observed_at)
+        return {
+            "kind": kind,
+            "rows": len(rows),
+            "markets": {
+                ticker: {
+                    "first_ts": min(ts),
+                    "last_ts": max(ts),
+                    "rows": len(ts),
+                    "gap_count": (
+                        sum(1 for a, b in itertools.pairwise(sorted(ts)) if b - a > period_seconds)
+                        if period_seconds
+                        else 0
+                    ),
+                }
+                for ticker, ts in sorted(by_ticker.items())
+            },
+            "capture_sessions": sorted(
+                {r.capture_session_id for r in rows if r.capture_session_id}
+            ),
+        }
     timestamps = [r.observed_at for r in rows]
     gaps = []
     if period_seconds:
@@ -210,6 +265,55 @@ def _parse_index_ids(raw: list[str] | None) -> list[str]:
     return [i for i in resolved if not (i in seen or seen.add(i))]
 
 
+def _kalshi_margin_client():
+    """A read-only KalshiMarginClient built from settings. Both perp captures
+    make only authenticated `/margin/*` GET calls; `paper_trading=True` keeps
+    the order-placement guard armed regardless."""
+    from kalshi_bot.execution.kalshi_margin_client import KalshiMarginClient
+
+    settings = get_settings()
+    key_id = settings.kalshi_key_id
+    if key_id is None:
+        raise SystemExit(
+            "perp capture needs KALSHI_KEY_ID set (in .env or the environment); "
+            "the /margin endpoints are authenticated."
+        )
+    key_path = settings.kalshi_private_key_path
+    if not key_path.exists():
+        raise SystemExit(
+            f"perp capture needs the RSA key at {key_path} (kalshi_private_key_path). "
+            "It is gitignored; restore it first."
+        )
+    return KalshiMarginClient(
+        key_id=key_id.get_secret_value(),
+        private_key_path=key_path,
+        use_demo_env=settings.kalshi_use_demo_env,
+        paper_trading=True,
+    )
+
+
+def _parse_perp_assets(raw: list[str] | None) -> list[str]:
+    """`--perp-asset` accepts asset symbols (BTC, ETH), full perp tickers
+    (KXBTCPERP), 'all', or a comma-list; repeatable. 'all' / default -> the
+    nine registry crypto assets."""
+    if not raw:
+        return list(DEFAULT_PERP_ASSETS)
+    tokens: list[str] = []
+    for chunk in raw:
+        tokens.extend(t.strip() for t in chunk.split(",") if t.strip())
+    resolved: list[str] = []
+    for tok in tokens:
+        up = tok.upper()
+        if up == "ALL":
+            resolved.extend(DEFAULT_PERP_ASSETS)
+        elif up.startswith("KX") and up.endswith("PERP"):
+            resolved.append(up.removeprefix("KX").removesuffix("PERP"))
+        else:
+            resolved.append(up)
+    seen: set[str] = set()
+    return [a for a in resolved if not (a in seen or seen.add(a))]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--import-jsonl", type=Path)
@@ -234,10 +338,30 @@ def main() -> None:
         help="index(es) to poll: asset symbol (BTC, ETH, SOL...), raw CF Benchmarks id "
         "(BRTI, SOLUSD_RTI), 'all', or a comma-list. Repeatable. Default: BTC.",
     )
-    parser.add_argument("--interval", type=float, default=60.0, help="BRTI poll interval, seconds")
+    parser.add_argument(
+        "--interval", type=float, default=60.0,
+        help="poll interval in seconds (shared by --poll-brti and --poll-perp-marks)",
+    )
     parser.add_argument(
         "--duration", type=float, default=3600.0,
-        help="how long the BRTI poll runs, seconds (it does not restart itself)",
+        help="how long a poll loop runs, seconds (it does not restart itself)",
+    )
+    parser.add_argument(
+        "--backfill-funding", action="store_true",
+        help="one-shot idempotent pull of Kalshi crypto-perp funding history "
+        "(read-only, authenticated). Uses --start-ts/--end-ts, defaulting to the "
+        "last 90 days.",
+    )
+    parser.add_argument(
+        "--poll-perp-marks", action="store_true",
+        help="run a foreground loop over /margin/markets recording crypto perp "
+        "settlement marks (Ctrl+C or --duration stops it)",
+    )
+    parser.add_argument(
+        "--perp-asset", action="append", default=None,
+        help="perp(s) for --backfill-funding / --poll-perp-marks: asset symbol "
+        "(BTC, ETH...), full ticker (KXBTCPERP), 'all', or a comma-list. "
+        "Repeatable. Default: the nine registry crypto assets.",
     )
     args = parser.parse_args()
     if args.import_jsonl and not args.kind:
@@ -270,6 +394,37 @@ def main() -> None:
                 interval_s=args.interval, duration_s=args.duration, session_id=session_id,
             )
             print("poll_brti=", json.dumps(result.as_dict(), sort_keys=True))
+        if args.backfill_funding:
+            now = int(time.time())
+            start_ts = args.start_ts if args.start_ts is not None else now - 90 * 86_400
+            end_ts = args.end_ts if args.end_ts is not None else now
+            assets = _parse_perp_assets(args.perp_asset)
+            with _kalshi_margin_client() as client:
+                tickers = resolve_crypto_perp_tickers(client, wanted=assets)
+                if not tickers:
+                    print(f"no active crypto perps match {assets}")
+                else:
+                    print(f"backfilling funding for {len(tickers)} perp(s): {', '.join(tickers)}")
+                    fres = backfill_funding(
+                        session, client, tickers=tickers,
+                        start_ts=start_ts, end_ts=end_ts, session_id=session_id,
+                    )
+                    print("backfill_funding=", json.dumps(fres.as_dict(), sort_keys=True))
+        if args.poll_perp_marks:
+            assets = _parse_perp_assets(args.perp_asset)
+            with _kalshi_margin_client() as client:
+                tickers = resolve_crypto_perp_tickers(client, wanted=assets)
+                if not tickers:
+                    print(f"no active crypto perps match {assets}")
+                else:
+                    print(f"polling {len(tickers)} perp mark feed(s): {', '.join(tickers)}")
+                    source = KalshiPerpMarkSource(client, tickers=tickers)
+                    mres = poll_perp_marks(
+                        session, source,
+                        interval_s=args.interval, duration_s=args.duration,
+                        session_id=session_id,
+                    )
+                    print("poll_perp_marks=", json.dumps(mres.as_dict(), sort_keys=True))
         if args.report:
             for kind in KINDS:
                 print(json.dumps(gap_report(session, kind), sort_keys=True))
