@@ -115,6 +115,21 @@ and close, ties → YES) — not off Coinbase, Binance, or TradingView spot.
   cannot honestly reconstruct `available_at` — that reintroduces the look-ahead
   leak this rebuild exists to remove.
 
+### BRTI source (resolved 2026-09-07)
+
+BRTI is captured **live, forward-only** through Kalshi's authenticated CF
+Benchmarks REST passthrough
+(`GET https://external-api.kalshi.com/trade-api/v2/cfbenchmarks/values?id=BRTI`,
+RSA-PSS signed, read-only market data). `kalshi_bot.data.brti.KalshiBRTISource`
+drives it; `scripts/capture_session.py --poll-brti --brti-source kalshi` is the
+loop. Smoke-tested live: real values returned, rows persisted with honest
+`observed_at` / `available_at`.
+
+**Operator: run `start_capture.bat`** (repo root) and leave the window open. It
+refreshes contract candles and polls BRTI in ~6-hour cycles, foreground-only,
+resumable. After the first cycle, `scripts/run_validation.py` prints the real
+fill rate — a NO-GO is expected until ~71+ days accumulate.
+
 ### The capture plan
 
 `scripts/capture_session.py`, **foreground only** — no scheduler, no service, no
