@@ -30,6 +30,11 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from kalshi_bot.config.crypto_registry import DEFAULT_CRYPTO_REGISTRY  # noqa: E402
+
 PYTHON = sys.executable
 LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "archiver_loop.log"
 # Crypto-only by explicit decision (2026-09-04): weather series are dropped from
@@ -45,9 +50,10 @@ LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "archiver_loop.log"
 # as any other series (O3 in the same proposal). It needs its own pass at 1-minute
 # period granularity (see below), not the 60-minute default used for the ladders.
 SERIES = [
-    "KXBTC",
-    "KXBTCD",
-    "KXBTC15M",
+    instrument.series_ticker
+    for asset in DEFAULT_CRYPTO_REGISTRY
+    for instrument in asset.event_instruments.values()
+    if instrument.series_ticker
 ]
 
 logger = logging.getLogger("archiver_loop")

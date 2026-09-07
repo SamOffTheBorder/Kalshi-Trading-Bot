@@ -16,6 +16,12 @@ from pathlib import Path
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from kalshi_bot.config.crypto_registry import (
+    DEFAULT_CRYPTO_REGISTRY,
+    CryptoAssetConfig,
+    validate_registry,
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -243,6 +249,20 @@ class Settings(BaseSettings):
         description="Shared secret for the LAN-exposed dashboard. Required before "
         "the web UI starts.",
     )
+
+    crypto_registry: tuple[CryptoAssetConfig, ...] = Field(
+        default=DEFAULT_CRYPTO_REGISTRY,
+        description=(
+            "JSON registry of crypto assets; lifecycle and venue mappings are validated before use."
+        ),
+    )
+
+    @field_validator("crypto_registry")
+    @classmethod
+    def _validate_crypto_registry(
+        cls, value: tuple[CryptoAssetConfig, ...]
+    ) -> tuple[CryptoAssetConfig, ...]:
+        return validate_registry(value)
 
     @field_validator("max_drawdown_halt_pct")
     @classmethod

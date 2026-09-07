@@ -1,9 +1,12 @@
 from kalshi_bot.storage.db import create_all_tables, get_engine, get_session_factory
 from kalshi_bot.storage.models import (
+    AssetRunRecord,
     BacktestRun,
     Base,
     BRTIObservation,
     Candle,
+    CryptoRegistrySnapshot,
+    DiscoveryResult,
     KalshiMarket,
     OrderBookSnapshot,
     PublicTrade,
@@ -13,10 +16,13 @@ from kalshi_bot.storage.models import (
 )
 
 __all__ = [
+    "AssetRunRecord",
     "BRTIObservation",
     "BacktestRun",
     "Base",
     "Candle",
+    "CryptoRegistrySnapshot",
+    "DiscoveryResult",
     "KalshiMarket",
     "OrderBookSnapshot",
     "PublicTrade",

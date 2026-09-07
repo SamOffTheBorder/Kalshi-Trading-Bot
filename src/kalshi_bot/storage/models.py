@@ -242,6 +242,51 @@ class BRTIObservation(Base):
     provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
+class CryptoRegistrySnapshot(Base):
+    """Immutable registry/configuration snapshot used for audit and replay."""
+
+    __tablename__ = "crypto_registry_snapshots"
+    __table_args__ = (UniqueConstraint("registry_version", name="uq_registry_snapshot_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    registry_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    captured_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    registry_json: Mapped[list | dict] = mapped_column(JSON, nullable=False)
+
+
+class DiscoveryResult(Base):
+    """Latest or historical result of explicit event/perp discovery."""
+
+    __tablename__ = "discovery_results"
+    __table_args__ = (Index("ix_discovery_asset_instrument", "asset_id", "instrument", "cadence"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    instrument: Mapped[str] = mapped_column(String(16), nullable=False)  # event|perp
+    cadence: Mapped[str | None] = mapped_column(String(8))
+    identifier: Mapped[str] = mapped_column(String(64), nullable=False)
+    checked_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    eligible: Mapped[bool] = mapped_column(nullable=False, default=False)
+    failure_reason: Mapped[str | None] = mapped_column(String(256))
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+
+class AssetRunRecord(Base):
+    """Asset-attributed collection/backtest/admission run record."""
+
+    __tablename__ = "asset_run_records"
+    __table_args__ = (Index("ix_asset_runs_asset_time", "asset_id", "started_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    cadence: Mapped[str | None] = mapped_column(String(8))
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    started_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    ended_at: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON)
+
+
 class SignalRecord(Base):
     """Every strategy evaluation — including HOLDs — with inputs and reasoning.
 

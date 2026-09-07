@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from kalshi_bot.config.crypto_registry import DEFAULT_CRYPTO_REGISTRY  # noqa: E402
 from kalshi_bot.data.crypto_feeds.spot_klines import (  # noqa: E402
     fetch_coinbase_daily,
     fetch_coinbase_hourly,
@@ -45,8 +46,12 @@ from kalshi_bot.storage import (  # noqa: E402
     get_session_factory,
 )
 
-DEFAULT_SERIES = ["KXBTC", "KXBTCD", "KXBTC15M"]
-SPOT_SYMBOLS = ["BTC-USD"]
+DEFAULT_SERIES = [
+    instrument.series_ticker
+    for asset in DEFAULT_CRYPTO_REGISTRY
+    for instrument in asset.event_instruments.values()
+    if instrument.series_ticker and instrument.lifecycle in {"observe", "backtest", "paper", "live"}
+]
 
 
 def fetch_series(
@@ -148,32 +153,33 @@ def fetch_series(
     return markets_done, candles_inserted
 
 
-def fetch_spot(session: Session) -> int:
+def fetch_spot(session: Session, *, assets=DEFAULT_CRYPTO_REGISTRY) -> int:
     """Daily spot klines from both CF Benchmarks constituent sources."""
     existing: set[tuple[str, str, int]] = set(
         session.execute(select(SpotCandle.exchange, SpotCandle.symbol, SpotCandle.open_ts)).tuples()
     )
     inserted = 0
-    for symbol in SPOT_SYMBOLS:
-        for fetch in (fetch_kraken_daily, fetch_coinbase_daily, fetch_coinbase_hourly):
-            try:
-                rows = fetch(symbol)
-            except Exception as exc:  # one source failing shouldn't kill the other
-                logger.warning("{} fetch failed for {}: {}", fetch.__name__, symbol, exc)
-                continue
-            for row in rows:
-                key = (row["exchange"], row["symbol"], row["open_ts"])
-                if key not in existing:
-                    session.add(SpotCandle(**row))
-                    existing.add(key)
-                    inserted += 1
+    for asset in assets:
+        for symbol in asset.spot_symbols:
+            for fetch in (fetch_kraken_daily, fetch_coinbase_daily, fetch_coinbase_hourly):
+                try:
+                    rows = fetch(symbol)
+                except Exception as exc:  # one source failing shouldn't kill the other
+                    logger.warning("{} fetch failed for {}: {}", fetch.__name__, symbol, exc)
+                    continue
+                for row in rows:
+                    key = (row["exchange"], row["symbol"], row["open_ts"])
+                    if key not in existing:
+                        session.add(SpotCandle(**row))
+                        existing.add(key)
+                        inserted += 1
     session.commit()
     return inserted
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--series", nargs="*", default=DEFAULT_SERIES)
+    parser.add_argument("--series", nargs="*", default=None)
     parser.add_argument("--period", type=int, default=60, choices=[1, 60, 1440])
     parser.add_argument("--max-markets", type=int, default=0, help="0 = no limit")
     parser.add_argument(
@@ -191,6 +197,7 @@ def main() -> None:
     parser.add_argument("--spot", action="store_true", help="also fetch daily spot klines")
     parser.add_argument("--report", action="store_true", help="coverage report only, no fetch")
     args = parser.parse_args()
+    series = args.series if args.series is not None and args.series else DEFAULT_SERIES
 
     engine = get_engine()
     create_all_tables(engine)
@@ -198,12 +205,12 @@ def main() -> None:
 
     with session_factory() as session:
         if args.report:
-            for s in args.series:
+            for s in series:
                 print(coverage_report(session, s, args.period).summary())
             return
 
         with KalshiPublicClient(max_reads_per_second=8) as client:
-            for s in args.series:
+            for s in series:
                 markets, candles = fetch_series(
                     client,
                     session,

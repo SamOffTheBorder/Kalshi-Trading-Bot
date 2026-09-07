@@ -8,20 +8,20 @@
 
 ## 1. Registry and configuration foundation
 
-- [ ] 1.1 Add typed `CryptoAssetConfig` and `CryptoInstrumentConfig` models with stable asset IDs, per-cadence (`15m`/`60m`) event-series metadata and contract shape, lifecycle mode, approved spot-feed mappings, optional perp metadata, and correlation group.
-- [ ] 1.2 Populate the shipped registry: preserve BTC; configure ETH as `backtest` for 15-minute and hourly markets; configure SOL, XRP, DOGE, BNB, HYPE, NEAR, and ZEC as `observe` for every listed cadence; add LINK only as an observation/perp candidate until a compatible event series is verified.
-- [ ] 1.3 Add settings validation that rejects duplicate asset IDs/series, an unsupported lifecycle mode, absent spot mapping for a spot-dependent asset, and missing correlation groups.
-- [ ] 1.4 Add generated `.env.example` coverage and unit tests for registry/settings validation without exposing secrets.
-- [ ] 1.5 Replace BTC-specific public constants at application boundaries with registry lookups while retaining backwards-compatible BTC defaults where external scripts require them.
+- [x] 1.1 Add typed `CryptoAssetConfig` and `CryptoInstrumentConfig` models with stable asset IDs, per-cadence (`15m`/`60m`) event-series metadata and contract shape, lifecycle mode, approved spot-feed mappings, optional perp metadata, and correlation group.
+- [x] 1.2 Populate the shipped registry: preserve BTC; configure ETH as `backtest` for 15-minute and hourly markets; configure SOL, XRP, DOGE, BNB, HYPE, NEAR, and ZEC as `observe` for every listed cadence; add LINK only as an observation/perp candidate until a compatible event series is verified.
+- [x] 1.3 Add settings validation that rejects duplicate asset IDs/series, an unsupported lifecycle mode, absent spot mapping for a spot-dependent asset, and missing correlation groups.
+- [x] 1.4 Add generated `.env.example` coverage and unit tests for registry/settings validation without exposing secrets.
+- [x] 1.5 Replace BTC-specific public constants at application boundaries with registry lookups while retaining backwards-compatible BTC defaults where external scripts require them.
 
 ## 2. Market discovery, data collection, and persistence
 
-- [ ] 2.1 Add an explicit public event-series discovery service that validates each configured 15-minute and hourly series, captures active market shape/cadence and quote metadata, and persists an asset/instrument/cadence discovery snapshot with timestamp and failure reason.
-- [ ] 2.2 Add authenticated margin-market discovery for optional perps, recording contract multiplier, minimum order size, leverage, funding availability, and reference-index metadata separately from event discovery.
-- [ ] 2.3 Define and implement the event/perp compatibility check: same registered asset, active instruments, compatible index/settlement metadata, current contract metadata, and a bounded snapshot age.
-- [ ] 2.4 Add an idempotent schema migration mechanism and additive persistence for registry snapshots, discovery/eligibility results, and asset-attributed run/admission records; test populated SQLite upgrade and fresh database creation.
-- [ ] 2.5 Generalize `fetch_historical.py` to select registry assets in `observe` or higher mode, archive each validated 15-minute and hourly event series, fetch only approved asset spot feeds, and print per-asset/cadence results. Keep event cadence separate from candle period; hourly markets must retain fine-grained candles for simulation.
-- [ ] 2.6 Generalize `archiver_loop.py` to use the registry while preserving its manual foreground-only policy, per-series time budget, resumable collection, and no scheduler/service behavior.
+- [x] 2.1 Add an explicit public event-series discovery service that validates each configured 15-minute and hourly series, captures active market shape/cadence and quote metadata, and persists an asset/instrument/cadence discovery snapshot with timestamp and failure reason.
+- [x] 2.2 Add authenticated margin-market discovery for optional perps, recording contract multiplier, minimum order size, leverage, funding availability, and reference-index metadata separately from event discovery.
+- [x] 2.3 Define and implement the event/perp compatibility check: same registered asset, active instruments, compatible index/settlement metadata, current contract metadata, and a bounded snapshot age.
+- [x] 2.4 Add an idempotent schema migration mechanism and additive persistence for registry snapshots, discovery/eligibility results, and asset-attributed run/admission records; test populated SQLite upgrade and fresh database creation.
+- [x] 2.5 Generalize `fetch_historical.py` to select registry assets in `observe` or higher mode, archive each validated 15-minute and hourly event series, fetch only approved asset spot feeds, and print per-asset/cadence results. Keep event cadence separate from candle period; hourly markets must retain fine-grained candles for simulation.
+- [x] 2.6 Generalize `archiver_loop.py` to use the registry while preserving its manual foreground-only policy, per-series time budget, resumable collection, and no scheduler/service behavior.
 - [ ] 2.7 Implement asset-level coverage and market-liveness qualification using configurable spread, depth, OI, recent-volume, coverage, gap, and freshness thresholds; fail closed on unavailable data.
 - [ ] 2.8 Add fixture-based tests for valid discovery, missing/renamed event series, malformed market shape, missing spot feed, stale snapshots, one-sided quotes, and incompatible event/perp pairs.
 
