@@ -84,6 +84,75 @@ gate rejects any liquidation, coming within 15% of liquidation, or leverage over
 regardless of PnL. Perps go live only after their own gate **and** the event-contract
 gate both pass.
 
+## Data status and capture plan
+
+**As of 2026-09-06 the validation pipeline is code-complete and tested, but no
+run can render a merits verdict — the required data does not exist in the
+archive and cannot be cheaply backfilled.** This is the single blocker for the
+rebuild reaching paper trading.
+
+### What the archive holds (`data/kalshi_bot.db`)
+
+| Data | State |
+| --- | --- |
+| KXBTC15M settled markets | **6,444** — complete |
+| KXBTC15M 1-minute contract candles | **~96,500**, 70 near-complete UTC days (2026-06-28 → 09-05) |
+| `brti_observations` | **0 rows** — blocks the binary gate |
+| perp mark price / funding rates / margin-market metadata | **no tables** — blocks any perp evaluation |
+
+The contract side of KXBTC15M is essentially complete. The **BRTI index series
+is entirely absent**, and KXBTC15M resolves off BRTI (60-second averages at open
+and close, ties → YES) — not off Coinbase, Binance, or TradingView spot.
+
+### Why BRTI cannot be backfilled
+
+- A spot proxy (any exchange, TradingView) resolves a meaningful fraction of
+  contracts differently from BRTI. The marginal trades live in the last ~1% of
+  index noise, which is exactly where a proxy and BRTI diverge.
+- CF Benchmarks sells historical BRTI; the free endpoint is real-time only.
+- Causal discipline requires each reading stamped with both `observed_at` and
+  `available_at` (when a live system could first have acted on it). A backfill
+  cannot honestly reconstruct `available_at` — that reintroduces the look-ahead
+  leak this rebuild exists to remove.
+
+### The capture plan
+
+`scripts/capture_session.py`, **foreground only** — no scheduler, no service, no
+unattended process. One session should poll **BRTI + KXBTC15M event quotes +
+(ETH/SOL indices) + perp mark price + funding rate** together; the marginal cost
+of extra endpoints is near zero and it yields binary *and* perp raw material in
+the same window. Perp/margin endpoints are authenticated and each live
+authenticated call needs explicit operator approval.
+
+Sizing (assuming a conservative ~1% eligible-trade rate):
+
+| segment | duration |
+| --- | ---: |
+| training window | 28 days |
+| embargo | 1 day |
+| test fold 1–3 | 14 days each |
+| reserve for gaps / restarts | ~19 days |
+
+Minimum contiguous geometry for three 14-day folds is **~71 days**; **90 days is
+the recommended operator target**. Run a diagnostic `scripts/run_validation.py`
+after ~3 test days to measure the real fill rate and re-plan — more calendar
+time cannot repair a structurally inactive strategy, only an outage or data gap.
+
+### Reusing the strategy for ETH / SOL / other Kalshi cryptos
+
+The strategy *structure* generalizes; the *feed and data* are per-asset.
+
+| Component | Reusable as-is? |
+| --- | --- |
+| `signals/settlement_window.py`, `strategy/settlement_prob.py`, `strategy/short_horizon_trend.py` | **Yes** — generic on any timestamped index series |
+| Causal engine, walk-forward, promotion gate | **Yes** — already series-agnostic |
+| Index feed | **No** — ETH resolves off a CF Benchmarks ETH index, not BRTI; each asset is its own capture |
+| `ResolutionSpec` (window seconds, tie rule, index) | **No** — per contract |
+| Captured data | **No** — per asset |
+
+The `multi-asset-crypto-scalping` change provides the asset registry (per-asset
+event series + index-feed mapping + lifecycle mode) this depends on.
+
 ## Promotion order if the event-contract gate fails
 
 Per the v2 plan's §8.5 ordering, unchanged: **funding carry, then weather, then park.**
