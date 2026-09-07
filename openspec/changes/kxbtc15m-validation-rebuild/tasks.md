@@ -1,10 +1,10 @@
 ## 1. Evidence Baseline and Data Contract
 
-- [ ] 1.1 Mark existing v2 reports as diagnostic only and add a KXBTC15M-only run configuration with dataset provenance.
-- [ ] 1.2 Audit Kalshi fixed-point field handling and migrate persisted prices and quantities to retain exchange precision without rewriting historical rows.
-- [ ] 1.3 Define timestamp/availability metadata for Kalshi market, order-book, public-trade, BRTI, and candle observations.
-- [ ] 1.4 Implement deliberate-session capture and import paths for the required KXBTC15M, BRTI, L2, and trade data, including gap/provenance reporting.
-- [ ] 1.5 Version the market-resolution and fee configuration used by each validation run and add tests against documented fee and resolution examples.
+- [x] 1.1 Mark existing v2 reports as diagnostic only and add a KXBTC15M-only run configuration with dataset provenance. Added evidence classification/provenance columns and `--kxbtc15m-only`; fingerprints include rows, range, config versions, and git context. 2 new tests; 338 non-backtest tests passed; ruff + pyright clean.
+- [x] 1.2 Audit Kalshi fixed-point field handling and migrate persisted prices and quantities to retain exchange precision without rewriting historical rows. Parser now uses Decimal for legacy cents and retains exact nullable `*_dollars`/`*_fp` values; versioned additive migration covers populated and fresh SQLite. 2 migration/precision tests; 338 non-backtest tests passed; ruff + pyright clean.
+- [x] 1.3 Define timestamp/availability metadata for Kalshi market, order-book, public-trade, BRTI, and candle observations. Added `observed_at`/`available_at` plus capture provenance and documented canonical names for all five observation types. 1 schema test; 338 non-backtest tests passed; ruff + pyright clean.
+- [x] 1.4 Implement deliberate-session capture and import paths for the required KXBTC15M, BRTI, L2, and trade data, including gap/provenance reporting. Added foreground-only `scripts/capture_session.py`, conservative 8/s Kalshi capture, timestamped JSONL imports, session tagging, and per-kind gap/session reports. 338 non-backtest tests passed; ruff + pyright clean.
+- [x] 1.5 Version the market-resolution and fee configuration used by each validation run and add tests against documented fee and resolution examples. Added versioned `FeeConfig`/`ResolutionSpec`, run columns, and hand-worked 42c × 11 taker fee plus tie/direction resolution tests. 2 example tests; 338 non-backtest tests passed; ruff + pyright clean.
 
 ## 2. Causal Backtest and Execution Accounting
 

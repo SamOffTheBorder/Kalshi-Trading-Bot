@@ -5,9 +5,9 @@ HOLDs), simulated trades, and backtest runs — lives in this one schema.
 Column types are deliberately portable (no SQLite-only types) so the same
 models move to Postgres unchanged.
 
-Price convention: Kalshi contract prices are stored as integer cents (1-99),
-matching the API. Dollar amounts (PnL, fees) are floats in USD. Candle
-timestamps are integer epoch seconds, matching Kalshi's `end_period_ts`.
+Legacy price columns remain integer cents for existing backtests. New writes
+also retain the exact exchange dollar strings in nullable `*_dollars` columns;
+historical rows are never rewritten.
 """
 
 from __future__ import annotations
@@ -52,6 +52,12 @@ class Candle(Base):
     series_ticker: Mapped[str] = mapped_column(String(32), nullable=False)
     period_minutes: Mapped[int] = mapped_column(Integer, nullable=False)  # 1, 60, or 1440
     end_period_ts: Mapped[int] = mapped_column(Integer, nullable=False)  # epoch seconds
+    observed_at: Mapped[int | None] = mapped_column(Integer)
+    available_at: Mapped[int | None] = mapped_column(Integer)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
 
     # Trade-price OHLC; None when no trades occurred in the period.
     price_open: Mapped[int | None] = mapped_column(Integer)
@@ -68,6 +74,22 @@ class Candle(Base):
     yes_ask_high: Mapped[int | None] = mapped_column(Integer)
     yes_ask_low: Mapped[int | None] = mapped_column(Integer)
     yes_ask_close: Mapped[int | None] = mapped_column(Integer)
+
+    # Exact API values. Kept as strings to avoid Decimal/float conversion loss.
+    price_open_dollars: Mapped[str | None] = mapped_column(String(32))
+    price_high_dollars: Mapped[str | None] = mapped_column(String(32))
+    price_low_dollars: Mapped[str | None] = mapped_column(String(32))
+    price_close_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_bid_open_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_bid_high_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_bid_low_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_bid_close_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_ask_open_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_ask_high_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_ask_low_dollars: Mapped[str | None] = mapped_column(String(32))
+    yes_ask_close_dollars: Mapped[str | None] = mapped_column(String(32))
+    volume_fp: Mapped[str | None] = mapped_column(String(32))
+    open_interest_fp: Mapped[str | None] = mapped_column(String(32))
 
     volume: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     open_interest: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -91,11 +113,19 @@ class KalshiMarket(Base):
     strike_type: Mapped[str | None] = mapped_column(String(16))  # greater|less|between|...
     floor_strike: Mapped[float | None] = mapped_column(Float)
     cap_strike: Mapped[float | None] = mapped_column(Float)
+    floor_strike_exact: Mapped[str | None] = mapped_column(String(64))
+    cap_strike_exact: Mapped[str | None] = mapped_column(String(64))
 
     open_ts: Mapped[int] = mapped_column(Integer, nullable=False)
     close_ts: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False)  # settled|closed|active
     result: Mapped[str | None] = mapped_column(String(8))  # yes|no|None until settled
+    observed_at: Mapped[int | None] = mapped_column(Integer)
+    available_at: Mapped[int | None] = mapped_column(Integer)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
 class SpotCandle(Base):
@@ -124,6 +154,10 @@ class SpotCandle(Base):
     low: Mapped[float] = mapped_column(Float, nullable=False)
     close: Mapped[float] = mapped_column(Float, nullable=False)
     volume: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    observed_at: Mapped[int | None] = mapped_column(Integer)
+    available_at: Mapped[int | None] = mapped_column(Integer)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
 class BacktestRun(Base):
@@ -147,6 +181,65 @@ class BacktestRun(Base):
     status: Mapped[str] = mapped_column(String(16), default="running", nullable=False)
     metrics_train: Mapped[dict | None] = mapped_column(JSON)
     metrics_test: Mapped[dict | None] = mapped_column(JSON)
+    evidence_class: Mapped[str] = mapped_column(String(16), default="diagnostic", nullable=False)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+    fee_config_version: Mapped[str | None] = mapped_column(String(64))
+    resolution_config_version: Mapped[str | None] = mapped_column(String(64))
+
+
+class OrderBookSnapshot(Base):
+    """A point-in-time public L2 snapshot; availability is when it was received."""
+
+    __tablename__ = "order_book_snapshots"
+    __table_args__ = (Index("ix_l2_ticker_available", "market_ticker", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    bids: Mapped[list | dict] = mapped_column(JSON, nullable=False)
+    asks: Mapped[list | dict] = mapped_column(JSON, nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PublicTrade(Base):
+    """A public market trade with exchange event time and local availability."""
+
+    __tablename__ = "public_trades"
+    __table_args__ = (Index("ix_public_trades_ticker_available", "market_ticker", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_dollars: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity_fp: Mapped[str] = mapped_column(String(32), nullable=False)
+    taker_side: Mapped[str | None] = mapped_column(String(8))
+    trade_id: Mapped[str | None] = mapped_column(String(128))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class BRTIObservation(Base):
+    """Timestamped CF Benchmarks BRTI reading used by KXBTC15M resolution."""
+
+    __tablename__ = "brti_observations"
+    __table_args__ = (Index("ix_brti_available", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    value_dollars: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
 class SignalRecord(Base):

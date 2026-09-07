@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.types import NullType
 
 from kalshi_bot.config.settings import Settings, get_settings
+from kalshi_bot.storage.migrations import migrate
 from kalshi_bot.storage.models import Base
 
 
@@ -42,6 +43,7 @@ def create_all_tables(engine: Engine) -> None:
     needs a real migration.
     """
     Base.metadata.create_all(engine)
+    migrate(engine)
     _add_missing_columns(engine)
 
 

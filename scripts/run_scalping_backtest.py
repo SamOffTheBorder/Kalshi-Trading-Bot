@@ -34,9 +34,16 @@ from sqlalchemy import func, select  # noqa: E402
 
 from kalshi_bot.backtest.engine import BacktestEngine  # noqa: E402
 from kalshi_bot.config.settings import get_settings  # noqa: E402
+from kalshi_bot.data.provenance import (  # noqa: E402
+    ValidationRunConfig,
+    dataset_fingerprint,
+    git_commit,
+)
 from kalshi_bot.execution.backtest_broker import BacktestBroker  # noqa: E402
 from kalshi_bot.risk.drawdown_guard import DrawdownGuard  # noqa: E402
+from kalshi_bot.signals.fees import DEFAULT_FEE_CONFIG, DEFAULT_RESOLUTION_SPEC  # noqa: E402
 from kalshi_bot.storage import (  # noqa: E402
+    BacktestRun,
     Candle,
     create_all_tables,
     get_engine,
@@ -70,6 +77,10 @@ async def main() -> None:
     )
     parser.add_argument("--cash", type=float, default=None)
     parser.add_argument("--eval-stride-s", type=int, default=900)
+    parser.add_argument("--kxbtc15m-only", action="store_true",
+                        help="restrict the dataset and stamp the run as validation evidence")
+    parser.add_argument("--evidence-class", choices=["diagnostic", "validation"],
+                        default="diagnostic")
     args = parser.parse_args()
 
     settings = get_settings()
@@ -77,11 +88,13 @@ async def main() -> None:
     create_all_tables(engine)
     session = get_session_factory(engine)()
 
-    lo, hi = session.execute(
-        select(func.min(Candle.end_period_ts), func.max(Candle.end_period_ts)).where(
-            Candle.period_minutes == 1
-        )
-    ).one()
+    series_filter = "KXBTC15M" if args.kxbtc15m_only else None
+    candle_window = select(func.min(Candle.end_period_ts), func.max(Candle.end_period_ts)).where(
+        Candle.period_minutes == 1
+    )
+    if series_filter:
+        candle_window = candle_window.where(Candle.series_ticker == series_filter)
+    lo, hi = session.execute(candle_window).one()
     if lo is None:
         print("No archived candles. Run scripts/fetch_historical.py first.")
         return
@@ -93,6 +106,7 @@ async def main() -> None:
         return
 
     cash = args.cash if args.cash is not None else settings.bankroll_total_usd
+    evidence_class = "validation" if args.kxbtc15m_only else args.evidence_class
 
     strategy_cls, config_cls = STRATEGIES[args.strategy]
     config = config_cls()
@@ -126,6 +140,20 @@ async def main() -> None:
     print(f"strategy={args.strategy} config={config}")
     print(f"Backtesting {fmt(start_ts)} .. {fmt(end_ts)} (split {fmt(split_ts)}), ${cash:.2f}")
     result = await bt.run(start_ts=start_ts, end_ts=end_ts, split_ts=split_ts)
+    run = session.get(BacktestRun, result.run_id)
+    if run is not None:
+        run.evidence_class = evidence_class
+        run.fee_config_version = DEFAULT_FEE_CONFIG.version
+        run.resolution_config_version = DEFAULT_RESOLUTION_SPEC.version
+        run.provenance = {
+            **dataset_fingerprint(session, start_ts, end_ts, series_filter),
+            "series_filter": series_filter or "ALL",
+            "git_commit": git_commit(),
+            "fee_config": DEFAULT_FEE_CONFIG.as_dict(),
+            "resolution_spec": DEFAULT_RESOLUTION_SPEC.as_dict(),
+            "validation_config": ValidationRunConfig().as_dict() if series_filter else None,
+        }
+        session.commit()
     print()
     print(result.summary())
     print(f"ever_halted={guard.ever_halted} final_guard_state={guard.state}")

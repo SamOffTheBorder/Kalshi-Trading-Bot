@@ -25,14 +25,51 @@ only shows up at realistic order sizes (see the v2 change's cost-floor.md).
 from __future__ import annotations
 
 import math
+from dataclasses import asdict, dataclass
 
 TAKER_FEE_COEFFICIENT = 0.07
 MAKER_FEE_COEFFICIENT = 0.0175
 
 
+@dataclass(frozen=True)
+class FeeConfig:
+    """Versioned exchange fee assumptions recorded with validation runs."""
+
+    version: str = "2026-09-kalshi"
+    taker_coefficient: float = TAKER_FEE_COEFFICIENT
+    maker_coefficient: float = MAKER_FEE_COEFFICIENT
+    charged_at_entry: bool = True
+    settlement_fee: bool = False
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+DEFAULT_FEE_CONFIG = FeeConfig()
+
+
+@dataclass(frozen=True)
+class ResolutionSpec:
+    """Versioned KXBTC15M settlement predicate."""
+
+    version: str = "2026-09-kxbtc15m-brti-60s"
+    series_ticker: str = "KXBTC15M"
+    window_seconds: int = 60
+    tie_result: str = "yes"
+
+    def resolves_yes(self, average_before_close: float, average_before_open: float) -> bool:
+        return average_before_close >= average_before_open
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+DEFAULT_RESOLUTION_SPEC = ResolutionSpec()
+
+
 def entry_fee_dollars(
     price_cents: int,
-    quantity: int,
+    quantity: float,
     *,
     coefficient: float = TAKER_FEE_COEFFICIENT,
 ) -> float:
