@@ -620,25 +620,38 @@ class BacktestEngine:
                 if symbol is None:
                     continue
                 hourly_ts, hourly_close = spot_hourly[symbol]
-                spot = self._latest_before(hourly_ts, hourly_close, ts)
-                if spot is None:
-                    continue
+                spot_val = self._latest_before(hourly_ts, hourly_close, ts)
                 daily_ts, daily_close = spot_daily[symbol]
                 cutoff = bisect.bisect_left(daily_ts, ts)
                 daily_history = daily_close[:cutoff]
                 try:
                     vol = estimate_volatility(daily_history)
                 except ValueError:
-                    continue
+                    vol = None
+
+                # The settlement-aware strategies (§4.1-4.4) consult only the
+                # quote and BRTI, never spot/vol/trend. Rather than skip every
+                # market when no SpotCandle history is archived (the validation
+                # path does not collect one), fall through with sentinel
+                # inputs — a strategy that DOES need spot already guards on
+                # `spot > 0` / `vol_source` (e.g. crypto_mispricing).
+                spot = spot_val if spot_val is not None else 0.0
+                vol_annual = vol.vol_annual if vol is not None else 0.0
+                vol_source = vol.source if vol is not None else "unavailable"
 
                 # trend z-score: realized log-return over the lookback window,
                 # normalized by the zero-drift model's expected scale (sigma*sqrt(t))
                 trend_z: float | None = None
                 spot_then = self._latest_before(hourly_ts, hourly_close, ts - self.trend_lookback_s)
-                if spot_then is not None and spot_then > 0 and vol.vol_annual > 0:
+                if (
+                    spot_val is not None
+                    and spot_then is not None
+                    and spot_then > 0
+                    and vol_annual > 0
+                ):
                     lookback_years = self.trend_lookback_s / (365 * 24 * 3600)
-                    trend_z = math.log(spot / spot_then) / (
-                        vol.vol_annual * math.sqrt(lookback_years)
+                    trend_z = math.log(spot_val / spot_then) / (
+                        vol_annual * math.sqrt(lookback_years)
                     )
 
                 spot_bars = self._bars_before(
@@ -659,8 +672,8 @@ class BacktestEngine:
                     yes_bid_cents=candle.yes_bid_close,
                     yes_ask_cents=candle.yes_ask_close,
                     spot=spot,
-                    vol_annual=vol.vol_annual,
-                    vol_source=vol.source,
+                    vol_annual=vol_annual,
+                    vol_source=vol_source,
                     trend_zscore=trend_z,
                     spot_bars=spot_bars,
                     brti_readings=self._brti_before(
