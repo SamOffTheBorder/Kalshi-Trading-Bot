@@ -25,6 +25,73 @@ alone justify an oversized position.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
+from kalshi_bot.signals.fees import TAKER_FEE_COEFFICIENT, entry_fee_dollars
+
+
+@dataclass(frozen=True)
+class FixedRiskConfig:
+    """Sizing assumptions for the validation path.
+
+    ``risk_pct`` is risk at the declared executable stop, while
+    ``max_position_pct`` remains a notional safety cap.  Fees are included in
+    the loss budget, so a stop cannot silently exceed the configured risk.
+    """
+
+    risk_pct: float = 0.01
+    max_position_pct: float = 0.05
+    fee_coefficient: float = TAKER_FEE_COEFFICIENT
+    include_exit_fee: bool = True
+    version: str = "2026-09-fixed-risk-v1"
+
+    def as_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def size_validation_position(
+    *,
+    equity_usd: float,
+    entry_price_cents: int,
+    stop_price_cents: int,
+    config: FixedRiskConfig | None = None,
+    target_price_cents: int | None = None,
+    quantity_step: float = 1.0,
+) -> float:
+    """Size a validation trade from executable stop distance and full costs.
+
+    The worst-case loss is the stop loss plus the entry fee and (when
+    configured) the stop/exit fee.  ``quantity_step`` supports fractional
+    instruments while preserving the legacy whole-contract default.
+    """
+    config = config or FixedRiskConfig()
+    if equity_usd <= 0 or entry_price_cents <= 0 or stop_price_cents < 0:
+        return 0.0
+    if quantity_step <= 0:
+        raise ValueError("quantity_step must be positive")
+    if not 0.0 < config.risk_pct <= 1.0:
+        raise ValueError("risk_pct must be in (0, 1]")
+    if not 0.0 < config.max_position_pct <= 1.0:
+        raise ValueError("max_position_pct must be in (0, 1]")
+    entry = entry_price_cents / 100.0
+    stop = stop_price_cents / 100.0
+    distance = abs(entry - stop)
+    if distance <= 0 or entry >= 1.0:
+        return 0.0
+    entry_fee = entry_fee_dollars(entry_price_cents, 1.0, coefficient=config.fee_coefficient)
+    exit_fee = (
+        entry_fee_dollars(stop_price_cents, 1.0, coefficient=config.fee_coefficient)
+        if config.include_exit_fee
+        else 0.0
+    )
+    loss_per_unit = distance + entry_fee + exit_fee
+    if loss_per_unit <= 0:
+        return 0.0
+    risk_size = equity_usd * config.risk_pct / loss_per_unit
+    notional_size = equity_usd * config.max_position_pct / (entry + entry_fee)
+    raw = min(risk_size, notional_size)
+    return max(0.0, (raw // quantity_step) * quantity_step)
+
 
 def compute_r(entry_price: float, stop_price: float) -> float:
     """`R`: the dollar distance from entry to stop, per unit. Always positive
@@ -82,4 +149,4 @@ def size_fixed_risk(
     return int(min(r_based_size, max_notional_size))
 
 
-__all__ = ["compute_r", "size_fixed_risk"]
+__all__ = ["FixedRiskConfig", "compute_r", "size_fixed_risk", "size_validation_position"]

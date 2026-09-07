@@ -100,12 +100,12 @@
 
 ## 3. Risk, Walk-Forward, and Reporting Gates
 
-- [ ] 3.1 Make fixed dollar risk derive from executable stop distance and full expected costs; remove baseline Kelly sizing from the validation path.
-- [ ] 3.2 Compute per-trade breakeven and expectancy from actual entry, stop, target, fill assumptions, and both-leg costs.
-- [ ] 3.3 Implement embargoed rolling walk-forward evaluation with fresh broker, cash, and risk-guard state for every out-of-sample fold.
-- [ ] 3.4 Produce per-fold and aggregate reports for net expectancy, coverage, calibration/Brier score, realized versus modeled costs, fills, cancels, partial fills, and adverse selection.
-- [ ] 3.5 Add day-blocked bootstrap confidence intervals and parameter-stability/latency-outage sensitivity checks to the promotion report.
-- [ ] 3.6 Define and enforce the paper-trading promotion gate; preserve failed and legacy results without treating them as passing evidence.
+- [x] 3.1 Make fixed dollar risk derive from executable stop distance and full expected costs; remove baseline Kelly sizing from the validation path. Added `FixedRiskConfig` and `size_validation_position`; Kelly remains available only to legacy/live-compatible callers and is not imported by the validation primitives.
+- [x] 3.2 Compute per-trade breakeven and expectancy from actual entry, stop, target, fill assumptions, and both-leg costs. Added `TradeEconomics`/`trade_economics` with held-side prices and separate entry/stop/target fee legs.
+- [x] 3.3 Implement embargoed rolling walk-forward evaluation with fresh broker, cash, and risk-guard state for every out-of-sample fold. Added `rolling_folds`, `WalkForwardFold`, `run_walkforward`, and a boundary-plan CLI; evaluator factories are invoked once per fold.
+- [x] 3.4 Produce per-fold and aggregate reports for net expectancy, coverage, calibration/Brier score, realized versus modeled costs, fills, cancels, partial fills, and adverse selection. Added typed `FoldReport`/`AggregateReport` builders over settlement and optional execution/prediction observations.
+- [x] 3.5 Add day-blocked bootstrap confidence intervals and parameter-stability/latency-outage sensitivity checks to the promotion report. Added deterministic day-block bootstrap plus stability and outage summary helpers.
+- [x] 3.6 Define and enforce the paper-trading promotion gate; preserve failed and legacy results without treating them as passing evidence. Added explicit validation-evidence, sample, coverage, expectancy, Brier, fold-CI, and status checks; legacy/diagnostic reports cannot pass.
 
 ## 4. Settlement-Aware and Trend Research
 

@@ -14,6 +14,7 @@ pays $1 on a win, $0 on a loss. EV=0 at:
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 
 import numpy as np
@@ -26,6 +27,97 @@ from kalshi_bot.signals.fees import (
 )
 
 HOURS_PER_YEAR = 365 * 24
+
+
+@dataclass(frozen=True)
+class TradeEconomics:
+    """Cost-aware economics for one proposed binary-contract trade."""
+
+    entry_price_dollars: float
+    stop_price_dollars: float
+    target_price_dollars: float
+    quantity: float
+    entry_fee_usd: float
+    stop_exit_fee_usd: float
+    target_exit_fee_usd: float
+    breakeven_win_rate: float
+    expectancy_usd: float
+    modeled_win_probability: float
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+def trade_economics(
+    *,
+    entry_price_dollars: float,
+    stop_price_dollars: float,
+    target_price_dollars: float,
+    quantity: float,
+    modeled_win_probability: float,
+    fee_rate: float = TAKER_FEE_COEFFICIENT,
+    exit_on_stop: bool = True,
+) -> TradeEconomics:
+    """Derive breakeven and EV from this trade's prices and both legs.
+
+    Prices are for the held side (YES or NO).  The stop and target are
+    executable exit prices, not spot or settlement proxies.
+    """
+    if quantity <= 0 or not 0 <= modeled_win_probability <= 1:
+        raise ValueError("quantity must be positive and probability must be in [0, 1]")
+    if not 0 < entry_price_dollars < 1:
+        raise ValueError("entry price must be in (0, 1)")
+    if not 0 <= stop_price_dollars <= 1 or not 0 <= target_price_dollars <= 1:
+        raise ValueError("stop and target prices must be in [0, 1]")
+    entry_fee = entry_fee_rate_at_price(entry_price_dollars, coefficient=fee_rate) * quantity
+    stop_fee = (
+        entry_fee_rate_at_price(stop_price_dollars, coefficient=fee_rate) * quantity
+        if exit_on_stop
+        else 0.0
+    )
+    target_fee = entry_fee_rate_at_price(target_price_dollars, coefficient=fee_rate) * quantity
+    win_pnl = (target_price_dollars - entry_price_dollars) * quantity - entry_fee - target_fee
+    loss_pnl = (stop_price_dollars - entry_price_dollars) * quantity - entry_fee - stop_fee
+    denominator = win_pnl - loss_pnl
+    breakeven = (-loss_pnl / denominator) if denominator > 0 else 1.0
+    expectancy = modeled_win_probability * win_pnl + (1 - modeled_win_probability) * loss_pnl
+    return TradeEconomics(
+        entry_price_dollars, stop_price_dollars, target_price_dollars, quantity,
+        entry_fee, stop_fee, target_fee, breakeven, expectancy, modeled_win_probability,
+    )
+
+
+def brier_score(probabilities: Sequence[float], outcomes: Sequence[bool | int]) -> float | None:
+    """Mean squared probability error; returns ``None`` for no observations."""
+    if len(probabilities) != len(outcomes):
+        raise ValueError("probabilities and outcomes must have equal length")
+    if not probabilities:
+        return None
+    if any(not 0 <= p <= 1 for p in probabilities):
+        raise ValueError("probabilities must be in [0, 1]")
+    return float(np.mean([(p - int(y)) ** 2 for p, y in zip(probabilities, outcomes, strict=True)]))
+
+
+def day_block_bootstrap_ci(
+    values: Iterable[tuple[int, float]], *, samples: int = 2_000,
+    confidence: float = 0.95, seed: int = 0,
+) -> tuple[float, float] | None:
+    """Bootstrap a mean by UTC day blocks, retaining intraday dependence."""
+    grouped: dict[int, list[float]] = {}
+    for ts, value in values:
+        grouped.setdefault(ts // 86_400, []).append(float(value))
+    if not grouped:
+        return None
+    if samples < 1 or not 0 < confidence < 1:
+        raise ValueError("samples must be positive and confidence must be in (0, 1)")
+    rng = np.random.default_rng(seed)
+    blocks = list(grouped.values())
+    means = np.empty(samples)
+    for i in range(samples):
+        chosen = rng.integers(0, len(blocks), size=len(blocks))
+        means[i] = np.mean(np.concatenate([blocks[j] for j in chosen]))
+    alpha = (1 - confidence) / 2
+    return float(np.quantile(means, alpha)), float(np.quantile(means, 1 - alpha))
 
 
 def breakeven_win_rate(cost_dollars: float, fee_rate: float = TAKER_FEE_COEFFICIENT) -> float:
