@@ -27,7 +27,8 @@ from kalshi_bot.storage.models import Base, Candle, KalshiMarket, SimulatedTrade
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext
 
 BASE = 1_784_000_000
-T1 = BASE + 60
+T1 = BASE + 60  # decision candle
+T1_FILL = BASE + 120  # next candle — a queued entry executes here (§2.1/§2.2)
 M1_CLOSE = BASE + 900
 END = BASE + 1_200
 
@@ -85,12 +86,12 @@ def _seed(session: Session, *, result: str) -> None:
             result=result,
         )
     )
-    session.add(
-        Candle(
+    def candle(end_ts: int) -> Candle:
+        return Candle(
             market_ticker="M1",
             series_ticker="KXBTC15M",
             period_minutes=1,
-            end_period_ts=T1,
+            end_period_ts=end_ts,
             price_open=49,
             price_high=51,
             price_low=48,
@@ -102,7 +103,9 @@ def _seed(session: Session, *, result: str) -> None:
             volume=10_000,
             open_interest=5_000,
         )
-    )
+
+    # decision candle + the next candle the queued order fills against
+    session.add_all([candle(T1), candle(T1_FILL)])
     for i in range(40):
         session.add(
             SpotCandle(

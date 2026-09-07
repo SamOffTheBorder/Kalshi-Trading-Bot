@@ -7,6 +7,13 @@ Scenario (all arithmetic hand-computed in comments):
   - Market M1 (train segment): ask 40c/42c-high, settles YES -> win
   - Market M2 (test segment):  ask 45c flat,     settles NO  -> loss
   - Deterministic test strategy: BUY_YES whenever ask < 50, claimed p=0.90
+
+Causal timeline (kxbtc15m-validation-rebuild §2.1/§2.2): a decision made
+from the candle ending at T*_DECIDE is queued and executes against the NEXT
+candle for that market, at T*_FILL. Each market here gets two identical
+consecutive candles so the queued order has a bar to fill against; the fill
+prices (and therefore all the arithmetic below) are unchanged from the
+single-candle version — only the fill *timestep* moves one bar later.
 """
 
 import pytest
@@ -28,12 +35,18 @@ from kalshi_bot.storage.models import (
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext
 
 BASE = 1_784_000_000
-T1 = BASE + 3600  # M1's candle hour
-M1_CLOSE = BASE + 7200
-SPLIT = BASE + 10_000
-T2 = BASE + 14_400  # M2's candle hour
-M2_CLOSE = BASE + 18_000
-END = BASE + 20_000
+T1_DECIDE = BASE + 3600  # M1's decision candle
+T1_FILL = BASE + 7200  # M1's next candle — the queued order fills here
+M1_CLOSE = BASE + 10_800
+SPLIT = BASE + 12_000  # between M1's fill and M2's — M1 entry is train, M2 test
+T2_DECIDE = BASE + 14_400  # M2's decision candle
+T2_FILL = BASE + 18_000  # M2's next candle — fill here
+M2_CLOSE = BASE + 21_600
+END = BASE + 24_000
+
+# Back-compat aliases for the spot-seeding helper below.
+T1 = T1_DECIDE
+T2 = T2_DECIDE
 
 
 class DeterministicStrategy:
@@ -91,32 +104,42 @@ def seed_synthetic_history(session: Session) -> None:
             ),
         ]
     )
+    def m1_candle(end_ts: int) -> Candle:
+        return Candle(
+            market_ticker="M1",
+            series_ticker="KXBTCD",
+            period_minutes=60,
+            end_period_ts=end_ts,
+            yes_bid_low=35,
+            yes_bid_close=38,
+            yes_ask_high=42,
+            yes_ask_close=40,
+            volume=1_000,  # deep enough that the liquidity cap never binds here
+            open_interest=10,
+        )
+
+    def m2_candle(end_ts: int) -> Candle:
+        return Candle(
+            market_ticker="M2",
+            series_ticker="KXBTCD",
+            period_minutes=60,
+            end_period_ts=end_ts,
+            yes_bid_low=40,
+            yes_bid_close=43,
+            yes_ask_high=45,
+            yes_ask_close=45,
+            volume=1_000,
+            open_interest=10,
+        )
+
+    # Two identical consecutive candles per market: the strategy decides on
+    # the first, the queued order fills against the second (§2.1/§2.2).
     session.add_all(
         [
-            Candle(
-                market_ticker="M1",
-                series_ticker="KXBTCD",
-                period_minutes=60,
-                end_period_ts=T1,
-                yes_bid_low=35,
-                yes_bid_close=38,
-                yes_ask_high=42,
-                yes_ask_close=40,
-                volume=1_000,  # deep enough that the liquidity cap never binds here
-                open_interest=10,
-            ),
-            Candle(
-                market_ticker="M2",
-                series_ticker="KXBTCD",
-                period_minutes=60,
-                end_period_ts=T2,
-                yes_bid_low=40,
-                yes_bid_close=43,
-                yes_ask_high=45,
-                yes_ask_close=45,
-                volume=1_000,  # deep enough that the liquidity cap never binds here
-                open_interest=10,
-            ),
+            m1_candle(T1_DECIDE),
+            m1_candle(T1_FILL),
+            m2_candle(T2_DECIDE),
+            m2_candle(T2_FILL),
         ]
     )
     # 40 daily spot closes before BASE (constant -> vol 0, unused by the

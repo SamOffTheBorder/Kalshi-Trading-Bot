@@ -83,28 +83,35 @@ async def test_concurrent_same_timestep_entries_share_a_shrinking_bankroll(sessi
                 result="yes",
             )
         )
-        session.add(
-            Candle(
-                market_ticker=ticker,
-                series_ticker="KXBTCD",
-                period_minutes=1,
-                end_period_ts=BASE + 60,
-                price_open=10,
-                price_high=11,
-                price_low=9,
-                price_close=10,
-                yes_bid_low=9,
-                yes_bid_close=9,
-                yes_ask_high=11,
-                yes_ask_close=10,  # cheap contract -> large Kelly quantity
-                # High enough that BacktestBroker's own liquidity cap
-                # (volume * liquidity_cap_frac) never binds here — bankroll
-                # sizing must be the constraint this test actually exercises,
-                # not the unrelated fill-liquidity cap.
-                volume=1_000_000,
-                open_interest=10,
+        # Two candles per market at consecutive timesteps: all six decide on
+        # the first, all six queued orders drain against the second — still a
+        # single fill timestep, so the shared-shrinking-bankroll property
+        # this test exercises is unchanged (kxbtc15m-validation-rebuild
+        # §2.1/§2.2 defers the fill by one bar; it does not spread a
+        # correlated batch across bars).
+        for end_ts in (BASE + 60, BASE + 120):
+            session.add(
+                Candle(
+                    market_ticker=ticker,
+                    series_ticker="KXBTCD",
+                    period_minutes=1,
+                    end_period_ts=end_ts,
+                    price_open=10,
+                    price_high=11,
+                    price_low=9,
+                    price_close=10,
+                    yes_bid_low=9,
+                    yes_bid_close=9,
+                    yes_ask_high=11,
+                    yes_ask_close=10,  # cheap contract -> large Kelly quantity
+                    # High enough that BacktestBroker's own liquidity cap
+                    # (volume * liquidity_cap_frac) never binds here — bankroll
+                    # sizing must be the constraint this test actually exercises,
+                    # not the unrelated fill-liquidity cap.
+                    volume=1_000_000,
+                    open_interest=10,
+                )
             )
-        )
     # Spot data required for the engine to even build a StrategyContext
     # (vol estimation needs daily history; the strategy itself doesn't use
     # spot at all, but the engine gates evaluation on it existing).

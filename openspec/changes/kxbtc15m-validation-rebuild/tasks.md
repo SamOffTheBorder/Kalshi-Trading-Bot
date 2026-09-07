@@ -8,8 +8,61 @@
 
 ## 2. Causal Backtest and Execution Accounting
 
-- [ ] 2.1 Refactor the backtest timeline so features use only as-of observations and orders execute only on later eligible events.
-- [ ] 2.2 Restrict bar-only datasets to next-bar-or-later execution and add regression tests that detect look-ahead through incomplete OHLC bars.
+- [x] 2.1 Refactor the backtest timeline so features use only as-of observations and orders
+      execute only on later eligible events.
+
+      **Done.** `BacktestEngine` gained a deferred-order queue (`PendingEntry`). The
+      evaluate step no longer sizes/fills inline — a decision that would enter is QUEUED,
+      keyed by market (at most one pending order per market; a market with an order in
+      flight is not re-evaluated). A new step 3 in the main loop, running AFTER settlement
+      and BEFORE the equity/guard mark, drains pending entries: for each market with a
+      pending order and a candle at the current timestep, `_execute_pending()` runs the
+      full gate/size/fill/record path against THAT candle. Every gate is now evaluated at
+      FILL time against fill-time state — guard (`allows_new_entries()` at the fill ts),
+      throttle, liveness (`is_live_quote` on the FILL candle), bankroll re-mark + sizing,
+      and the entry-band check against the ACTUAL fill price. The feature-side as-of
+      discipline (spot/vol/trend-z/spot_bars all strictly-before `ts`) was already correct
+      and is unchanged. The decision's `SignalRecord` is captured into the `PendingEntry`
+      and its `.id` read after a flush at fill time (the row isn't flushed at decision
+      time), so the `SimulatedTrade.signal_id` FK still links correctly. A queued entry
+      whose market closes before any next candle arrives — or that is still queued when
+      history ends — expires unfilled and is counted (`pending_expired` in the run summary
+      log). No BrokerAdapter or strategy change; the paper/live loop is unaffected (it
+      already decides-then-submits across real book updates — this makes the backtest match
+      that).
+
+- [x] 2.2 Restrict bar-only datasets to next-bar-or-later execution and add regression
+      tests that detect look-ahead through incomplete OHLC bars.
+
+      **Done as the direct consequence of 2.1's queue.** A decision made from the candle
+      ending at `ts` can only fill against a candle ending at `ts' > ts` for the same
+      market — the engine never fills an order inside the same bar whose close the decision
+      consumed, and a bar's high/low/close can no longer fill an order "placed" during that
+      bar. New `tests/backtest/test_engine_causal_timeline.py` (6 look-ahead regression
+      tests, each built so the OLD same-bar and NEW next-bar behaviour give visibly
+      different hand-checked results):
+        1. a single candle → decision queued, never fills (old engine filled it against
+           that very bar);
+        2. decision-bar `ask_high` 42c but next-bar `ask_high` 60c → fill pays **60c**, the
+           pessimistic price of the bar it actually executed in, not 42c (the exact leak
+           this task closes);
+        3. a gap between decision bar and next candle → order waits, fills on the first
+           later candle that exists;
+        4. market closes before any next candle → queued order expires, no phantom
+           settlement entry, no error;
+        5. decision bar live, fill bar dead (0 OI shell) → dropped by the fill-time
+           liveness gate, and not rescued by a later healthy candle (strategy fired once);
+        6. guard HALTED at the fill timestep → queued entry decided while NORMAL does not
+           execute.
+      The four existing engine tests that had encoded same-bar decide-and-fill
+      (`test_engine_known_answer`, `_directional_probability`, `_concurrent_sizing`,
+      `_fixed_r_exit`) were updated to seed a second candle per market at the next
+      timestep; where the fixtures were hand-computed (`known_answer`, `fixed_r_exit`) the
+      fill candle carries identical prices, so every hand-checked number is unchanged and
+      only the fill *timestep* moves one bar. `concurrent_sizing`'s shared-shrinking-
+      bankroll property is preserved — a correlated batch still all decides on one bar and
+      all drains on the next (single fill timestep); the deferral does not spread a batch
+      across bars. Full suite: 377 passed, ruff + pyright clean.
 - [x] 2.3 Correct directional decision contracts so BUY YES and BUY NO both carry a valid, side-consistent fair probability and no default certainty path exists.
 - [x] 2.4 Rebuild simulated YES/NO lifecycle accounting with explicit entry/exit cashflows, fees on each matched leg, fractional quantity support, and side-aware early exits.
 - [x] 2.5 Implement taker-only executable pricing as the initial execution model; record resting orders as unfilled until a validated queue/partial-fill model is introduced.

@@ -24,9 +24,33 @@ from kalshi_bot.storage.models import Base, Candle, KalshiMarket, SimulatedTrade
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext
 
 BASE = 1_784_000_000
-ENTRY_TS = BASE + 60  # first 1-min candle
+DECIDE_TS = BASE + 60  # first 1-min candle — the strategy decides here
+ENTRY_TS = BASE + 120  # next candle — the queued order fills here (§2.1/§2.2)
+EXIT_TS = BASE + 240  # minute 3 candle — stop/target checked here
 MARKET_CLOSE = BASE + 900  # 15 minutes later
 END = BASE + 1_200
+
+
+def _entry_candle(end_ts: int, ticker: str = "M1") -> Candle:
+    """The ask 40c/42c-high candle used for both the decision bar and the
+    fill bar (identical prices, so entry economics are unchanged by the
+    one-bar fill deferral)."""
+    return Candle(
+        market_ticker=ticker,
+        series_ticker="KXBTCD",
+        period_minutes=1,
+        end_period_ts=end_ts,
+        price_open=39,
+        price_high=42,
+        price_low=38,
+        price_close=40,
+        yes_bid_low=38,
+        yes_bid_close=39,
+        yes_ask_high=42,
+        yes_ask_close=40,
+        volume=1_000,
+        open_interest=10,
+    )
 
 
 class FixedRTestStrategy:
@@ -128,31 +152,14 @@ async def test_target_hit_closes_position_before_settlement(session):
         )
     )
     # Entry candle: ask 40c/42c-high. Target = 40+10 = 50c.
-    session.add(
-        Candle(
-            market_ticker="M1",
-            series_ticker="KXBTCD",
-            period_minutes=1,
-            end_period_ts=ENTRY_TS,
-            price_open=39,
-            price_high=42,
-            price_low=38,
-            price_close=40,
-            yes_bid_low=38,
-            yes_bid_close=39,
-            yes_ask_high=42,
-            yes_ask_close=40,
-            volume=1_000,
-            open_interest=10,
-        )
-    )
+    session.add_all([_entry_candle(DECIDE_TS), _entry_candle(ENTRY_TS)])
     # Candle at minute 3: trade price reaches 51 -> crosses the 50c target.
     session.add(
         Candle(
             market_ticker="M1",
             series_ticker="KXBTCD",
             period_minutes=1,
-            end_period_ts=BASE + 240,
+            end_period_ts=EXIT_TS,
             price_open=45,
             price_high=51,
             price_low=44,
@@ -175,7 +182,7 @@ async def test_target_hit_closes_position_before_settlement(session):
     trade = trades[0]
     assert trade.status == "closed_early"
     assert trade.exit_price_cents == 50  # the target level itself, not the bar's 51 high
-    assert trade.exit_ts == BASE + 240
+    assert trade.exit_ts == EXIT_TS
     assert trade.net_pnl_usd is not None
     assert trade.net_pnl_usd > 0  # target hit on a YES position is a win
 
@@ -199,31 +206,14 @@ async def test_stop_hit_closes_position_as_a_loss(session):
             result="yes",  # OPPOSITE of the early-exit outcome
         )
     )
-    session.add(
-        Candle(
-            market_ticker="M1",
-            series_ticker="KXBTCD",
-            period_minutes=1,
-            end_period_ts=ENTRY_TS,
-            price_open=39,
-            price_high=42,
-            price_low=38,
-            price_close=40,
-            yes_bid_low=38,
-            yes_bid_close=39,
-            yes_ask_high=42,
-            yes_ask_close=40,
-            volume=1_000,
-            open_interest=10,
-        )
-    )
+    session.add_all([_entry_candle(DECIDE_TS), _entry_candle(ENTRY_TS)])
     # Minute 3: trade price falls to 29 -> crosses the 30c stop (40-10).
     session.add(
         Candle(
             market_ticker="M1",
             series_ticker="KXBTCD",
             period_minutes=1,
-            end_period_ts=BASE + 240,
+            end_period_ts=EXIT_TS,
             price_open=35,
             price_high=36,
             price_low=29,
@@ -263,31 +253,14 @@ async def test_neither_level_hit_holds_to_settlement(session):
             result="yes",
         )
     )
-    session.add(
-        Candle(
-            market_ticker="M1",
-            series_ticker="KXBTCD",
-            period_minutes=1,
-            end_period_ts=ENTRY_TS,
-            price_open=39,
-            price_high=42,
-            price_low=38,
-            price_close=40,
-            yes_bid_low=38,
-            yes_bid_close=39,
-            yes_ask_high=42,
-            yes_ask_close=40,
-            volume=1_000,
-            open_interest=10,
-        )
-    )
+    session.add_all([_entry_candle(DECIDE_TS), _entry_candle(ENTRY_TS)])
     # A quiet bar that stays comfortably inside [30, 50] the whole time.
     session.add(
         Candle(
             market_ticker="M1",
             series_ticker="KXBTCD",
             period_minutes=1,
-            end_period_ts=BASE + 240,
+            end_period_ts=EXIT_TS,
             price_open=40,
             price_high=41,
             price_low=39,
@@ -327,31 +300,14 @@ async def test_both_levels_touched_in_one_bar_assumes_stop_first(session):
             result="yes",
         )
     )
-    session.add(
-        Candle(
-            market_ticker="M1",
-            series_ticker="KXBTCD",
-            period_minutes=1,
-            end_period_ts=ENTRY_TS,
-            price_open=39,
-            price_high=42,
-            price_low=38,
-            price_close=40,
-            yes_bid_low=38,
-            yes_bid_close=39,
-            yes_ask_high=42,
-            yes_ask_close=40,
-            volume=1_000,
-            open_interest=10,
-        )
-    )
+    session.add_all([_entry_candle(DECIDE_TS), _entry_candle(ENTRY_TS)])
     # Wild bar: low 25 (below the 30c stop) AND high 55 (above the 50c target).
     session.add(
         Candle(
             market_ticker="M1",
             series_ticker="KXBTCD",
             period_minutes=1,
-            end_period_ts=BASE + 240,
+            end_period_ts=EXIT_TS,
             price_open=40,
             price_high=55,
             price_low=25,

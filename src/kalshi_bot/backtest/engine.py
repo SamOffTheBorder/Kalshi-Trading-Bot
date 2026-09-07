@@ -1,20 +1,31 @@
 """Event-driven backtest engine.
 
-Steps hourly through archived history, at each step:
-  1. settle markets that closed (official result, fee inside the fill model)
-  2. update the drawdown guard with current equity
-  3. build a StrategyContext per open market — the SAME context type, the
-     SAME strategy.evaluate(), and the SAME Kelly sizing the live loop will
-     use. No duplicated decision logic, ever (design decision 1).
+Steps through archived history event by event. At each timestep ts:
+  1. run intrabar fixed-R stop/target exit checks against this bar
+  2. settle markets that closed (official result, fee inside the fill model)
+  3. execute DEFERRED entry orders decided at an earlier timestep, against
+     THIS timestep's candle (kxbtc15m-validation-rebuild §2.1/§2.2)
+  4. update the drawdown guard with current equity
+  5. build a StrategyContext per open market — the SAME context type, the
+     SAME strategy.evaluate(), and the SAME sizing the live loop will use.
+     No duplicated decision logic, ever (design decision 1). A decision that
+     would enter is QUEUED, not filled here.
 
-Look-ahead discipline: at timestep ts the strategy sees the candle of the
-hour ending at ts, the spot close of that same hour, and volatility computed
-from daily closes strictly BEFORE ts. The train/test split is engine-enforced
-(design decision 6): metrics are segmented by entry time and the go/no-go
-reads only the test segment.
+Causal-timeline discipline (kxbtc15m-validation-rebuild, decision "Use an
+as-of event timeline"): a decision made from the candle ending at ts may
+consume only observations at or before ts, and its order is eligible to
+execute only on a LATER market-data event — the next candle for that market,
+at ts' > ts. The engine never fills an order inside the same bar whose close
+the decision consumed; a bar's high/low/close cannot fill an order placed
+"during" that bar. Bar-only history therefore supports only bar-close
+decisions with next-bar-or-later execution. A queued entry whose market
+closes before any next candle arrives simply expires unfilled.
 
-Equity is marked at entry cost for open positions (conservative; positions
-are held to settlement in this phase).
+The train/test split is engine-enforced (design decision 6): metrics are
+segmented by ENTRY time (the fill timestep) and the go/no-go reads only the
+test segment. Equity is marked at entry cost for open positions
+(conservative; positions are held to settlement unless a fixed-R exit ends
+them sooner).
 """
 
 from __future__ import annotations
@@ -23,6 +34,7 @@ import bisect
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import Literal
 
 from loguru import logger
 from sqlalchemy import select
@@ -36,9 +48,16 @@ from kalshi_bot.risk.drawdown_guard import DrawdownGuard
 from kalshi_bot.risk.entry_throttle import EntryThrottle
 from kalshi_bot.risk.kelly import size_binary_position
 from kalshi_bot.signals.volatility import estimate_volatility
-from kalshi_bot.storage.models import BacktestRun, Candle, KalshiMarket, SimulatedTrade, SpotCandle
+from kalshi_bot.storage.models import (
+    BacktestRun,
+    Candle,
+    KalshiMarket,
+    SignalRecord,
+    SimulatedTrade,
+    SpotCandle,
+)
 from kalshi_bot.storage.records import record_signal
-from kalshi_bot.strategy.base import Action, StrategyContext, StrategyProtocol
+from kalshi_bot.strategy.base import Action, Decision, StrategyContext, StrategyProtocol
 from kalshi_bot.strategy.levels import SpotBar
 
 SERIES_SYMBOL = {
@@ -48,6 +67,25 @@ SERIES_SYMBOL = {
     "KXETH": "ETH-USD",
     "KXETHD": "ETH-USD",
 }
+
+
+@dataclass
+class PendingEntry:
+    """An entry decision made at `decided_ts` from the candle ending then,
+    waiting to execute against the NEXT candle for its market (kxbtc15m-
+    validation-rebuild §2.1/§2.2). Holds everything the fill step needs so
+    it does not re-derive anything from post-decision data — the decision,
+    its side, the series, the signal-row id for the trade FK, and the market
+    close_ts so a pending order can expire if the market settles before any
+    next candle arrives."""
+
+    market_ticker: str
+    series_ticker: str
+    decided_ts: int
+    close_ts: int
+    decision: Decision
+    side: Literal["yes", "no"]
+    signal_row: SignalRecord  # the decision's audit row; .id read after flush at fill time
 
 
 @dataclass(frozen=True)
@@ -172,6 +210,128 @@ class BacktestEngine:
         idx = bisect.bisect_left(bar_ts, ts)
         return tuple(bars[max(0, idx - max_bars) : idx])
 
+    # -- deferred entry execution ------------------------------------------------
+
+    async def _execute_pending(
+        self,
+        pending: PendingEntry,
+        candle: Candle,
+        fill_ts: int,
+        *,
+        run_id: int,
+        trade_rows: dict[str, SimulatedTrade],
+        entry_ts_by_market: dict[str, int],
+        exit_levels_by_market: dict[str, tuple[int, int, Literal["yes", "no"]]],
+    ) -> str:
+        """Execute one previously-queued entry against `candle` (the next
+        candle for its market, strictly after the decision's own bar —
+        kxbtc15m-validation-rebuild §2.1/§2.2). Every gate and the sizing
+        run HERE against fill-time state:
+
+        - guard / throttle checked at `fill_ts`, not decision time
+        - liveness checked against the FILL candle
+        - bankroll re-marked and sized against available cash immediately
+          before the order (tasks.md 8.3: concurrent correlated fills must
+          share one capital ledger — still true here, since several pending
+          orders can drain against the same timestep)
+        - the entry band is checked against the ACTUAL FILL price
+
+        Returns one of: "filled", "rejected_band", "dead_quote",
+        "no_fill" (guard/throttle/size/broker rejected it).
+        """
+        decision = pending.decision
+        ticker = pending.market_ticker
+
+        if not self.guard.allows_new_entries():
+            return "no_fill"
+        if self.throttle is not None and not self.throttle.allows(pending.series_ticker, fill_ts):
+            return "no_fill"
+        if not is_live_quote(candle):
+            # Mandatory liveness filter (spec: "Only live markets are
+            # tradeable"), checked against the FILL candle — a market that
+            # went dead between decision and fill must not be entered.
+            return "dead_quote"
+
+        assert decision.fair_probability is not None  # checked before queuing
+        assert decision.entry_price_cents is not None
+        live_cash = await self.broker.get_account_balance()
+        quantity = size_binary_position(
+            p_win=decision.fair_probability,
+            cost_cents=decision.entry_price_cents,
+            bankroll_usd=live_cash,
+            kelly_fraction=self.kelly_fraction,
+            max_position_pct=self.max_position_pct,
+        )
+        if quantity <= 0:
+            return "no_fill"
+
+        self.broker.set_current_bar(
+            MarketBar(
+                market_ticker=ticker,
+                ts=fill_ts,
+                yes_bid_low=candle.yes_bid_low,
+                yes_bid_close=candle.yes_bid_close,
+                yes_ask_high=candle.yes_ask_high,
+                yes_ask_close=candle.yes_ask_close,
+                volume=candle.volume,
+                yes_bid_high=candle.yes_bid_high,
+                yes_ask_low=candle.yes_ask_low,
+            )
+        )
+        result = await self.broker.place_order(
+            OrderRequest(market_ticker=ticker, side=pending.side, quantity=quantity)
+        )
+        if result.status != "filled":
+            return "no_fill"
+
+        # Entry gates are evaluated against the ACTUAL FILL, not the price
+        # the strategy gated on at decision time (spec: backtest-engine
+        # "Entry gates are evaluated against the actual fill"). A fill
+        # outside the strategy's declared band is voided rather than
+        # recorded — the fix for Phase 1's 18/64 (28%) out-of-band trades.
+        fill_price = result.fill_price_cents
+        if fill_price is not None and (
+            (
+                decision.min_entry_price_cents is not None
+                and fill_price < decision.min_entry_price_cents
+            )
+            or (
+                decision.max_entry_price_cents is not None
+                and fill_price > decision.max_entry_price_cents
+            )
+        ):
+            self.broker.void_fill(ticker)
+            logger.warning(
+                "{}: fill at {}c rejected, outside entry band [{}, {}]",
+                ticker,
+                fill_price,
+                decision.min_entry_price_cents,
+                decision.max_entry_price_cents,
+            )
+            return "rejected_band"
+
+        entry_ts_by_market[ticker] = fill_ts
+        if decision.stop_price_cents is not None and decision.target_price_cents is not None:
+            exit_levels_by_market[ticker] = (
+                decision.stop_price_cents,
+                decision.target_price_cents,
+                pending.side,
+            )
+        self.session.flush()  # gives both the signal row and the trade row their ids
+        trade_rows[ticker] = SimulatedTrade(
+            backtest_run_id=run_id,
+            signal_id=pending.signal_row.id,
+            mode="backtest",
+            market_ticker=ticker,
+            side=pending.side,
+            quantity=result.quantity,
+            entry_price_cents=result.fill_price_cents or 0,
+            entry_ts=fill_ts,
+            status="open",
+        )
+        self.session.add(trade_rows[ticker])
+        return "filled"
+
     # -- main loop ------------------------------------------------------------------
 
     async def run(self, *, start_ts: int, end_ts: int, split_ts: int) -> BacktestResult:
@@ -233,16 +393,23 @@ class BacktestEngine:
         entry_ts_by_market: dict[str, int] = {}
         last_eval_ts: dict[str, int] = {}
         trade_rows: dict[str, SimulatedTrade] = {}
+        # Entry decisions awaiting execution on the NEXT candle for their
+        # market (kxbtc15m-validation-rebuild §2.1/§2.2). Keyed by ticker;
+        # at most one pending order per market at a time (a market with an
+        # order in flight is not re-evaluated). Drained in step 3 below.
+        pending_by_market: dict[str, PendingEntry] = {}
         # Fixed-R exit levels (contract-cents) for markets whose entry decision
         # declared them (tasks.md 6.1/6.2 + 8.1's engine extension). A market
         # not in this dict rides to settlement exactly as before — this is
         # purely additive, opt-in per decision.
-        exit_levels_by_market: dict[str, tuple[int, int, str]] = {}  # (stop, target, side)
+        # (stop_cents, target_cents, side)
+        exit_levels_by_market: dict[str, tuple[int, int, Literal["yes", "no"]]] = {}
         evaluated = 0
         entered = 0
         fills_rejected_outside_band = 0
         dead_quotes = 0
         closed_early = 0
+        pending_expired = 0
 
         for ts in timeline:
             # 1. fixed-R exit check: for every open position with declared
@@ -294,18 +461,62 @@ class BacktestEngine:
                         trade.fee_usd = s.fee_usd
                         trade.net_pnl_usd = s.net_pnl_usd
 
-            # 3. equity + guard (open positions marked at entry cost)
+            # 3. execute entry orders decided at an EARLIER timestep, against
+            # THIS timestep's candle for the same market (kxbtc15m-validation-
+            # rebuild §2.1/§2.2: an order is eligible only on a market-data
+            # event strictly after the one its decision consumed). Gates
+            # (guard, throttle, liveness, entry band) and sizing are all
+            # applied HERE, at fill time, against fill-time state — not at
+            # decision time — so a market that went dead, or a guard that
+            # HALTed, between decision and fill correctly blocks the entry.
+            candles_here = candles_by_ts.get(ts, [])
+            candle_by_ticker = {c.market_ticker: c for c in candles_here}
+            for ticker, pending in list(pending_by_market.items()):
+                if pending.close_ts <= ts:
+                    # Market settled (or is settling this step) before any
+                    # next candle arrived — the order never got a fill event.
+                    del pending_by_market[ticker]
+                    pending_expired += 1
+                    continue
+                fill_candle = candle_by_ticker.get(ticker)
+                if fill_candle is None:
+                    continue  # no market-data event yet; keep waiting
+                del pending_by_market[ticker]
+                filled = await self._execute_pending(
+                    pending,
+                    fill_candle,
+                    ts,
+                    run_id=run_row.id,
+                    trade_rows=trade_rows,
+                    entry_ts_by_market=entry_ts_by_market,
+                    exit_levels_by_market=exit_levels_by_market,
+                )
+                if filled == "filled":
+                    entered += 1
+                    if self.throttle is not None:
+                        self.throttle.record_entry(pending.series_ticker, ts)
+                elif filled == "rejected_band":
+                    fills_rejected_outside_band += 1
+                elif filled == "dead_quote":
+                    dead_quotes += 1
+
+            # 4. equity + guard (open positions marked at entry cost)
             cash = await self.broker.get_account_balance()
             open_positions = await self.broker.get_open_positions()
             equity = cash + sum(p.quantity * p.avg_entry_price_cents / 100 for p in open_positions)
             equity_curve.append((ts, equity))
             self.guard.update(equity, ts=ts)
 
-            # 3. evaluate open markets with a candle this hour
-            for candle in candles_by_ts.get(ts, []):
+            # 5. evaluate open markets with a candle this timestep. A decision
+            # that would enter is QUEUED here and executed on a LATER candle
+            # (step 3 above) — never filled in the same bar its decision
+            # consumed.
+            for candle in candles_here:
                 market = markets[candle.market_ticker]
                 if market.close_ts <= ts or market.ticker in entry_ts_by_market:
                     continue
+                if market.ticker in pending_by_market:
+                    continue  # an order is already in flight for this market
                 last = last_eval_ts.get(market.ticker)
                 if last is not None and ts - last < self.eval_stride_s:
                     continue
@@ -380,29 +591,10 @@ class BacktestEngine:
 
                 if decision.action == Action.HOLD:
                     continue
-                if not self.guard.allows_new_entries():
-                    continue
-                if self.throttle is not None and not self.throttle.allows(market.series_ticker, ts):
-                    continue
-                if not is_live_quote(candle):
-                    # Mandatory liveness filter (spec: "Only live markets are
-                    # tradeable"). 92/100 sampled KXBTCD strikes were 0c/1c
-                    # shells with zero OI — Phase 1's backtest filled against
-                    # these phantom quotes. The strategy still gets evaluated
-                    # and its decision recorded above (audit trail), but no
-                    # entry is ever generated for a dead market.
-                    dead_quotes += 1
-                    continue
-
-                # Side-consistent win probability comes straight from the
-                # decision — P(the chosen side wins), already inverted by the
-                # strategy for a NO decision (kxbtc15m-validation-rebuild
-                # §2.3). No `1 - (x or 0)` fallback: that turned every
-                # directional strategy's BUY_NO (which sets no bs_probability)
-                # into p_win = 1.0, i.e. certainty, and left its BUY_YES at
-                # p_win = None -> silently dropped below. A BUY that fails to
-                # declare `fair_probability` is a strategy bug; drop it loudly
-                # rather than sizing it as a sure thing.
+                # A BUY that fails to declare a side-consistent win
+                # probability is a strategy bug (kxbtc15m-validation-rebuild
+                # §2.3: no default-certainty path). Reject it at decision
+                # time — no point queuing an order that can never size.
                 p_win = decision.fair_probability
                 if p_win is None:
                     logger.warning(
@@ -422,125 +614,25 @@ class BacktestEngine:
                     continue
                 if decision.entry_price_cents is None:
                     continue
-                # Re-mark bankroll immediately before sizing THIS position,
-                # not once per timestep, and size against AVAILABLE CASH, not
-                # total equity (tasks.md 8.3 finding, 2026-09-06, two related
-                # bugs found in sequence):
-                #
-                # 1. When many correlated strikes fire in the same evaluation
-                #    batch (e.g. every threshold on one BTC move), each
-                #    entry's `create_order` call already debits the broker's
-                #    real cash synchronously — but Kelly sizing was reading
-                #    the STALE pre-batch `equity` for every position in the
-                #    batch, so each one sized against the full starting
-                #    bankroll as if it were the only position opened that
-                #    step. Diagnosed via a real run: ~24 simultaneous entries
-                #    each Kelly-sized off the same bankroll figure produced
-                #    an aggregate exposure far beyond any single position's
-                #    own cap, manifesting as a transient equity-marking
-                #    "HALT" that had nothing to do with real risk (every one
-                #    of those positions settled favorably 60 seconds later).
-                # 2. Fixing #1 by re-marking EQUITY (cash + value of already-
-                #    open positions) per entry wasn't enough: equity doesn't
-                #    shrink when cash converts into a new position (the
-                #    position's own cost is still counted as "yours"), so
-                #    concurrent correlated entries within one batch still
-                #    each saw ~the full original bankroll and sized as if it
-                #    were still free to spend — `place_order`'s own
-                #    `cost > self._cash` check then rejected most of them
-                #    outright (all-or-nothing) rather than letting them size
-                #    down proportionally. Sizing against AVAILABLE CASH only
-                #    (excluding money already locked in other open
-                #    positions) is the correct proxy: it's conservative,
-                #    matches what a real margin check would allow you to
-                #    spend, and lets a second/third correlated entry in the
-                #    same batch size down instead of being flatly rejected.
-                live_cash = await self.broker.get_account_balance()
-                quantity = size_binary_position(
-                    p_win=p_win,
-                    cost_cents=decision.entry_price_cents,
-                    bankroll_usd=live_cash,
-                    kelly_fraction=self.kelly_fraction,
-                    max_position_pct=self.max_position_pct,
+                # Queue the entry — it executes on the NEXT candle for this
+                # market (step 3), not here. All fill-time gates (guard,
+                # throttle, liveness, sizing, entry band) run at execution
+                # against fill-time state, not now.
+                side: Literal["yes", "no"] = (
+                    "yes" if decision.action == Action.BUY_YES else "no"
                 )
-                if quantity <= 0:
-                    continue
-
-                self.broker.set_current_bar(
-                    MarketBar(
-                        market_ticker=market.ticker,
-                        ts=ts,
-                        yes_bid_low=candle.yes_bid_low,
-                        yes_bid_close=candle.yes_bid_close,
-                        yes_ask_high=candle.yes_ask_high,
-                        yes_ask_close=candle.yes_ask_close,
-                        volume=candle.volume,
-                        yes_bid_high=candle.yes_bid_high,
-                        yes_ask_low=candle.yes_ask_low,
-                    )
-                )
-                side = "yes" if decision.action == Action.BUY_YES else "no"
-                result = await self.broker.place_order(
-                    OrderRequest(market_ticker=market.ticker, side=side, quantity=quantity)
-                )
-                if result.status != "filled":
-                    continue
-
-                # Entry gates are evaluated against the ACTUAL FILL, not the
-                # price the strategy gated on at decision time (spec:
-                # backtest-engine "Entry gates are evaluated against the
-                # actual fill"). Pessimistic fills can land worse than the
-                # decision price; a fill outside the strategy's own declared
-                # band is voided rather than recorded as a position — this is
-                # the fix for Phase 1's 18/64 (28%) out-of-band trades.
-                fill_price = result.fill_price_cents
-                if fill_price is not None and (
-                    (
-                        decision.min_entry_price_cents is not None
-                        and fill_price < decision.min_entry_price_cents
-                    )
-                    or (
-                        decision.max_entry_price_cents is not None
-                        and fill_price > decision.max_entry_price_cents
-                    )
-                ):
-                    self.broker.void_fill(market.ticker)
-                    fills_rejected_outside_band += 1
-                    logger.warning(
-                        "{}: fill at {}c rejected, outside entry band [{}, {}]",
-                        market.ticker,
-                        fill_price,
-                        decision.min_entry_price_cents,
-                        decision.max_entry_price_cents,
-                    )
-                    continue
-
-                entered += 1
-                if self.throttle is not None:
-                    self.throttle.record_entry(market.series_ticker, ts)
-                entry_ts_by_market[market.ticker] = ts
-                if (
-                    decision.stop_price_cents is not None
-                    and decision.target_price_cents is not None
-                ):
-                    exit_levels_by_market[market.ticker] = (
-                        decision.stop_price_cents,
-                        decision.target_price_cents,
-                        side,
-                    )
-                self.session.flush()
-                trade_rows[market.ticker] = SimulatedTrade(
-                    backtest_run_id=run_row.id,
-                    signal_id=signal_row.id,
-                    mode="backtest",
+                pending_by_market[market.ticker] = PendingEntry(
                     market_ticker=market.ticker,
+                    series_ticker=market.series_ticker,
+                    decided_ts=ts,
+                    close_ts=market.close_ts,
+                    decision=decision,
                     side=side,
-                    quantity=result.quantity,
-                    entry_price_cents=result.fill_price_cents or 0,
-                    entry_ts=ts,
-                    status="open",
+                    signal_row=signal_row,
                 )
-                self.session.add(trade_rows[market.ticker])
+
+        # any entry still queued when history ends never got a fill event
+        pending_expired += len(pending_by_market)
 
         # -- segment metrics by ENTRY time (enforced out-of-sample split) --------
         def segment(
@@ -569,7 +661,8 @@ class BacktestEngine:
         logger.info(
             "backtest run {} complete: {} evaluations, {} entries, {} settlements "
             "({} closed early on stop/target), {} fills rejected (outside entry band), "
-            "{} dead-quote markets skipped",
+            "{} dead-quote markets skipped, {} queued entries expired unfilled "
+            "(no next candle before market close)",
             run_row.id,
             evaluated,
             entered,
@@ -577,6 +670,7 @@ class BacktestEngine:
             closed_early,
             fills_rejected_outside_band,
             dead_quotes,
+            pending_expired,
         )
         return BacktestResult(run_id=run_row.id, train=train, test=test, final_equity=final_equity)
 
