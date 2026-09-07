@@ -212,6 +212,54 @@ class VetoVerdictRecord(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
 
 
+class ForecastRecord(Base):
+    """One short-horizon price forecast (tasks.md 7.2), persisted so its
+    predictive value can be measured against realized moves later (the same
+    "does this signal correlate with outcomes at all?" question tasks.md 7.5
+    asks of the veto).
+
+    Persisted unconditionally — including the neutral row a fail-safe
+    backend returns when it cannot produce a real forecast — so a
+    systematically unavailable forecaster is visible in the data rather than
+    silently absent, exactly as `VetoVerdictRecord` does for the veto.
+
+    `backend` names the implementation that produced the row (e.g.
+    ``"stub"`` / ``"chronos-bolt-small"``) so a later backend swap stays
+    distinguishable in the history. Prices are USD spot floats, matching
+    `SpotCandle` — this is a forecast of the underlying, not of a contract
+    price.
+    """
+
+    __tablename__ = "forecasts"
+    __table_args__ = (Index("ix_forecasts_signal", "signal_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, nullable=False
+    )
+    signal_id: Mapped[int | None] = mapped_column(ForeignKey("signals.id"))
+    backend: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    symbol: Mapped[str] = mapped_column(String(16), nullable=False)  # e.g. "BTC-USD"
+    asof_ts: Mapped[int] = mapped_column(Integer, nullable=False)  # last observed bar
+    horizon_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    last_price: Mapped[float] = mapped_column(Float, nullable=False)  # spot at asof_ts
+    # Median (point) forecast and a symmetric-ish interval from the backend's
+    # quantiles. None on a neutral fail-safe row.
+    median_price: Mapped[float | None] = mapped_column(Float)
+    low_price: Mapped[float | None] = mapped_column(Float)  # lower quantile
+    high_price: Mapped[float | None] = mapped_column(Float)  # upper quantile
+
+    # Convenience derived signal: expected fractional return over the horizon
+    # (median_price / last_price - 1). None on a neutral row. The strategy
+    # layer decides how to use it; storing it keeps benchmark queries simple.
+    expected_return: Mapped[float | None] = mapped_column(Float)
+    available: Mapped[bool] = mapped_column(nullable=False)  # False => neutral fail-safe row
+    reason: Mapped[str] = mapped_column(String(128), nullable=False)  # "ok" | failure code
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+
+
 class SimulatedTrade(Base):
     """A simulated (backtest or paper) position lifecycle record."""
 

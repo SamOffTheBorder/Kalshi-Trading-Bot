@@ -545,11 +545,42 @@ check-in can lose data once it rolls off Kalshi's ~6-week window).
       successfully (15.4s), confirming the wire format actually works end-to-end, not just
       against mocks. 13 mocked unit tests cover every fail-closed path plus the
       well-formed approve/reject cases.
-- [ ] 7.2 `ai/forecast.py` — Chronos-Bolt short-horizon BTC forecast as a numeric signal.
-      Purpose-built time-series model, not an LLM doing arithmetic. **Deferred** — needs
-      new heavy dependencies (`torch`, `chronos-forecasting`) not yet added; explicit
-      decision to scope this session to 7.1/7.6 only and revisit 7.2-7.5 as a separate,
-      deliberate step.
+- [x] 7.2 `ai/forecast.py` — short-horizon BTC forecast as a numeric signal.
+      **Interface built, real model backend deferred (deliberate).** Rationale: nothing on
+      the live path consumes a forecast yet (no strategy reads one, no paper loop exists),
+      and `chronos-forecasting` + `torch` is ~2GB the project has not taken on — pulling it
+      in to power a signal with no consumer is premature, and `kxbtc15m-validation-rebuild`
+      may redefine what a strategy input looks like anyway. So the contract lives now and
+      the model does not:
+      - `Forecaster` Protocol (`bars → ForecastSignal`, must never raise for an ordinary
+        data problem, must set `available=False` when not confident).
+      - `StubForecaster` — deterministic naive-drift baseline: mean per-bar log return
+        projected forward `horizon_minutes` (converted to steps via the input cadence's
+        median gap), symmetric interval at ±(k·stdev·√steps). This is the random-walk-with-
+        drift null hypothesis — honest about being a placeholder, and exactly what a real
+        model has to beat in 7.5's benchmark. A `ChronosForecaster` drops in later with no
+        caller change.
+      - **Fail-SAFE, opposite of the veto on purpose** (7.1 fails closed because a broken
+        risk check must block trades; a forecast is additive, so "can't produce one" ⇒
+        `ForecastSignal.neutral(...)` with `available=False` and every price field `None`,
+        never a blocked trade and never a raise). Neutral reasons are distinct:
+        `insufficient_history`, `non_positive_price`, `bad_bar_spacing`. Latency measured on
+        every path.
+      - `storage.models.ForecastRecord` (FK to `SignalRecord`, nullable for standalone
+        benchmark runs) + `to_forecast_record()` mapping helper — persisted unconditionally
+        including neutral rows, so a systematically-unavailable forecaster is visible in the
+        data (same discipline as `VetoVerdictRecord`, tasks.md 7.6). Prices are USD spot
+        floats matching `SpotCandle`, not contract cents — this forecasts BTC, not a Kalshi
+        price.
+      13 new tests (11 `test_forecast.py`: flat/drift/vol arithmetic hand-verified against
+      the closed-form, every neutral path, sub-bar horizon clamp, median-gap robustness,
+      latency, both mapping-helper directions; 2 `test_storage.py` roundtrips incl. the
+      null-price neutral row). Full suite 367 passed, ruff + pyright clean. No new
+      dependencies.
+
+      **Still deferred within 7.2:** the actual Chronos-Bolt backend (`ChronosForecaster`)
+      and its `torch`/`chronos-forecasting` deps — add when a consumer exists and the
+      dependency footprint is signed off.
 - [ ] 7.3 `ai/sentiment.py` — FinBERT headline sentiment (small, CPU-fine). **Deferred** —
       needs `transformers`/`torch`, not yet installed; same deferral as 7.2.
 - [ ] 7.4 `ai/openrouter.py` — slow path only: news retrieval, daily strategy review,

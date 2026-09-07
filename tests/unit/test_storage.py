@@ -9,6 +9,7 @@ from kalshi_bot.storage.models import (
     BacktestRun,
     Base,
     Candle,
+    ForecastRecord,
     SignalRecord,
     SimulatedTrade,
     VetoVerdictRecord,
@@ -145,6 +146,72 @@ def test_veto_verdict_record_allows_null_signal_id(session):
     session.commit()
     row = session.execute(select(VetoVerdictRecord)).scalar_one()
     assert row.signal_id is None
+
+
+def test_forecast_record_roundtrip(session):
+    """tasks.md 7.2/7.5: every forecast persists so its predictive value can
+    be measured against realized moves later."""
+    signal = SignalRecord(
+        evaluated_at_ts=1_752_534_000,
+        mode="paper",
+        strategy_name="trend_scalp",
+        market_ticker="KXBTC15M-26SEP0512",
+        action="BUY_YES",
+    )
+    session.add(signal)
+    session.flush()
+
+    session.add(
+        ForecastRecord(
+            signal_id=signal.id,
+            backend="stub",
+            symbol="BTC-USD",
+            asof_ts=1_752_533_940,
+            horizon_minutes=15,
+            last_price=64000.0,
+            median_price=64080.0,
+            low_price=63700.0,
+            high_price=64460.0,
+            expected_return=0.00125,
+            available=True,
+            reason="ok",
+            latency_ms=3,
+        )
+    )
+    session.commit()
+    row = session.execute(select(ForecastRecord)).scalar_one()
+    assert row.signal_id == signal.id
+    assert row.backend == "stub"
+    assert row.available is True
+    assert row.expected_return == pytest.approx(0.00125)
+
+
+def test_forecast_record_neutral_row_has_null_prices(session):
+    """A fail-safe neutral forecast (available=False) must still persist,
+    with every price field null — so an unavailable forecaster is visible
+    in the data rather than silently absent."""
+    session.add(
+        ForecastRecord(
+            signal_id=None,
+            backend="stub",
+            symbol="BTC-USD",
+            asof_ts=1_752_533_940,
+            horizon_minutes=15,
+            last_price=64000.0,
+            median_price=None,
+            low_price=None,
+            high_price=None,
+            expected_return=None,
+            available=False,
+            reason="insufficient_history",
+        )
+    )
+    session.commit()
+    row = session.execute(select(ForecastRecord)).scalar_one()
+    assert row.available is False
+    assert row.median_price is None
+    assert row.signal_id is None
+    assert row.reason == "insufficient_history"
 
 
 def test_backtest_run_with_trades_roundtrip(session):
