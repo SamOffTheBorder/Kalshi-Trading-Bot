@@ -257,6 +257,28 @@
       `scripts/run_validation.py` will run the same manifest once the required
       archive exists; it refuses to substitute another series.
 
+      **Update 2026-09-06 (commit `6100474`): the data-present path is now
+      implemented, not a `raise`.** `src/kalshi_bot/backtest/validation_run.py`
+      `run_validation_arms(session_factory)` runs each arm through
+      `rolling_folds` + `run_walkforward` with fresh broker/guard state per
+      fold, fixed-risk sizing (`BacktestEngine(sizing_mode="fixed_risk")`,
+      §3.1), and isotonic calibration fitted on prior folds only (fold 0 =
+      identity). Each fold runs the engine over `[train_start, test_end]` with
+      `split_ts = test_start`; only test-segment settlements feed its
+      `FoldReport`, then `aggregate_reports` + `evaluate_promotion`. Prereqs
+      landed in `bfc6ba0`: BRTI readings are populated into
+      `StrategyContext.brti_readings` from `BRTIObservation` (the
+      settlement-aware strategies previously always HELD on
+      `no_brti_readings`), and the engine eval loop no longer drops every
+      market when no `SpotCandle` history is archived. Fail-closed unchanged;
+      fold defaults track `SCRATCHPAD/capture-window-sizing.md` (28d train /
+      1d embargo / 14d folds). Tests:
+      `tests/unit/test_validation_run.py` (4) drive a synthetic causal archive
+      end-to-end through every arm. **The verdict is still a data-availability
+      NO-GO in this checkout** — a captured KXBTC15M + BRTI archive
+      (`scripts/capture_session.py`, operator-run) is the remaining
+      requirement before a merits verdict.
+
 ## 5. Perpetual Isolation and Execution Safety
 
 - [x] 5.1 Split perp strategy ledger, metrics, and promotion configuration from
