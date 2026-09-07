@@ -66,7 +66,37 @@
 - [x] 2.3 Correct directional decision contracts so BUY YES and BUY NO both carry a valid, side-consistent fair probability and no default certainty path exists.
 - [x] 2.4 Rebuild simulated YES/NO lifecycle accounting with explicit entry/exit cashflows, fees on each matched leg, fractional quantity support, and side-aware early exits.
 - [x] 2.5 Implement taker-only executable pricing as the initial execution model; record resting orders as unfilled until a validated queue/partial-fill model is introduced.
-- [ ] 2.6 Add unit and scenario tests for NO-side gains, early-close double-leg fees, unfilled maker orders, timestamp causality, and precision retention.
+- [x] 2.6 Add unit and scenario tests for NO-side gains, early-close double-leg fees,
+      unfilled maker orders, timestamp causality, and precision retention.
+
+      **Done, spread across the layer each concern belongs to:**
+      - **Broker unit level** (`tests/unit/test_backtest_broker.py`, from §2.4/§2.5):
+        NO-side gain/loss (`test_close_position_early_no_side_gain_uses_no_exit_value`,
+        `_loss_when_no_price_falls`), early-close double-leg fee
+        (`_charges_exit_leg_fee`, `test_settle_market_hold_to_expiry_has_no_exit_fee`),
+        unfilled maker order (`test_maker_order_is_unfilled_even_when_candle_range_would_
+        touch_it`, `_rejected_before_limit_price_check`, `test_taker_is_the_only_fill_path`).
+      - **Engine scenario level** — new `tests/backtest/test_engine_scenario_accounting.py`
+        (5 tests): a BUY_NO settling NO is a win with entry-fee-only accounting on the
+        persisted `SimulatedTrade` row (`entry_fee_usd`/`exit_fee_usd`/`fee_usd`/
+        `net_pnl_usd` all hand-checked against `entry_fee_dollars`); its mirror (settles
+        YES → loss); a fixed-R **target** exit records BOTH leg fees with
+        `fee_usd == entry+exit` and `net == gross - entry_fee - exit_fee`; the same for a
+        fixed-R **stop** exit at a loss; and the contrast case — a hold-to-expiry
+        settlement has `exit_fee_usd == 0`.
+      - **Timestamp causality** — covered by §2.2's new
+        `tests/backtest/test_engine_causal_timeline.py` (6 tests): no same-bar fill, fill
+        pays the next bar's price not the decision bar's, first-later-candle fill after a
+        gap, queued order expires if the market closes first, and both liveness and the
+        drawdown guard are evaluated at fill time.
+      - **Precision retention** — the exchange `*_dollars`/`*_fp` columns and their
+        no-truncation guarantee are §1.2's; tests live with the data-contract layer, not
+        the engine. The engine deals in the integer-cents fill prices those columns
+        preserve alongside.
+      - **Maker at the engine level** — not applicable: `BacktestEngine` never submits
+        `execution_style="maker"` (there is no strategy path that produces one), so the
+        maker-unfilled contract is a broker-unit concern only.
+      Full suite: 382 passed, ruff + pyright clean.
 
 ## 3. Risk, Walk-Forward, and Reporting Gates
 
