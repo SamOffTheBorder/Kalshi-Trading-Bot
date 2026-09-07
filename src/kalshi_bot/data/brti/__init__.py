@@ -21,6 +21,7 @@ it.
 
 from __future__ import annotations
 
+from kalshi_bot.data.brti.kalshi_source import KalshiBRTISource
 from kalshi_bot.data.brti.poll import (
     BRTIReadingRaw,
     BRTISource,
@@ -33,6 +34,7 @@ __all__ = [
     "BRTIReadingRaw",
     "BRTISource",
     "CallableBRTISource",
+    "KalshiBRTISource",
     "PollResult",
     "poll_brti",
 ]

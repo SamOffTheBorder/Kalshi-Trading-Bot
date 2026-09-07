@@ -8,9 +8,13 @@ This command never schedules itself and never runs unattended.
   unauthenticated Kalshi public client.
 - ``--poll-brti`` runs a FOREGROUND BRTI polling loop (Ctrl+C or ``--duration``
   stops it) that records `observed_at` / `available_at` honestly and logs —
-  never fills — gaps. The concrete data source is chosen with ``--brti-source``;
-  until an operator picks the real endpoint, only ``fake`` (a synthetic random
-  walk, for wiring/tests) is implemented.
+  never fills — gaps. Choose the data source with ``--brti-source``:
+    * ``kalshi`` — the real index, via Kalshi's authenticated CF Benchmarks
+      REST passthrough (read-only market data; needs ``KALSHI_KEY_ID`` and
+      ``secrets/kalshi_private_key.pem``). This is what a validation capture
+      uses.
+    * ``fake`` — a synthetic random walk, for wiring and tests only. Prints a
+      loud warning and MUST NOT feed a validation run.
 - ``--report`` prints gap analysis for every observation kind.
 """
 
@@ -31,10 +35,12 @@ from sqlalchemy import select
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from kalshi_bot.config.settings import get_settings  # noqa: E402
 from kalshi_bot.data.brti import (  # noqa: E402
     BRTIReadingRaw,
     BRTISource,
     CallableBRTISource,
+    KalshiBRTISource,
     poll_brti,
 )
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
@@ -51,7 +57,7 @@ from kalshi_bot.storage import (  # noqa: E402
 )
 
 KINDS = {"brti": BRTIObservation, "l2": OrderBookSnapshot, "trade": PublicTrade}
-BRTI_SOURCES = ("fake",)
+BRTI_SOURCES = ("kalshi", "fake")
 
 
 def import_jsonl(session, path: Path, kind: str, session_id: str) -> int:
@@ -142,11 +148,26 @@ def _make_fake_brti_source() -> BRTISource:
 def _resolve_brti_source(name: str) -> BRTISource:
     if name == "fake":
         return _make_fake_brti_source()
-    raise SystemExit(
-        f"--brti-source {name!r} is not implemented. Only {BRTI_SOURCES} exist "
-        "today; the real BRTI endpoint has not been chosen. See "
-        "docs-site/docs/status/kxbtc15m-rebuild.md."
-    )
+    if name == "kalshi":
+        settings = get_settings()
+        key_id = settings.kalshi_key_id
+        if key_id is None:
+            raise SystemExit(
+                "--brti-source kalshi needs KALSHI_KEY_ID set (in .env or the "
+                "environment). The BRTI passthrough is an authenticated Kalshi "
+                "endpoint."
+            )
+        key_path = settings.kalshi_private_key_path
+        if not key_path.exists():
+            raise SystemExit(
+                f"--brti-source kalshi needs the RSA key at {key_path} "
+                "(kalshi_private_key_path). It is gitignored; restore it first."
+            )
+        return KalshiBRTISource(
+            key_id=key_id.get_secret_value(),
+            private_key_path=key_path,
+        )
+    raise SystemExit(f"--brti-source {name!r} is not a known source ({BRTI_SOURCES}).")
 
 
 def main() -> None:
@@ -164,8 +185,9 @@ def main() -> None:
         help="run a foreground BRTI polling loop (Ctrl+C or --duration stops it)",
     )
     parser.add_argument(
-        "--brti-source", choices=BRTI_SOURCES, default="fake",
-        help="BRTI data source; only 'fake' (synthetic) exists until the real endpoint is chosen",
+        "--brti-source", choices=BRTI_SOURCES, default="kalshi",
+        help="BRTI data source: 'kalshi' (real, authenticated CF Benchmarks passthrough) "
+        "or 'fake' (synthetic, tests only)",
     )
     parser.add_argument("--interval", type=float, default=60.0, help="BRTI poll interval, seconds")
     parser.add_argument(
