@@ -98,7 +98,7 @@ rebuild reaching paper trading.
 | KXBTC15M settled markets | **6,444** — complete |
 | KXBTC15M 1-minute contract candles | **~96,500**, 70 near-complete UTC days (2026-06-28 → 09-05) |
 | `brti_observations` | **0 rows** — blocks the binary gate |
-| perp mark price / funding rates / margin-market metadata | **no tables** — blocks any perp evaluation |
+| `perp_mark_observations` / `perp_funding_observations` | **tables exist (2026-09-07); filling from live capture** |
 
 The contract side of KXBTC15M is essentially complete. The **BRTI index series
 is entirely absent**, and KXBTC15M resolves off BRTI (60-second averages at open
@@ -129,6 +129,29 @@ loop. Smoke-tested live: real values returned, rows persisted with honest
 refreshes contract candles and polls BRTI in ~6-hour cycles, foreground-only,
 resumable. After the first cycle, `scripts/run_validation.py` prints the real
 fill rate — a NO-GO is expected until ~71+ days accumulate.
+
+### Perp series (wired 2026-09-07)
+
+Both perp data kinds the perp ledger/gate (`backtest/perp_ledger.py`, §5.1)
+needs are now captured, each the way Kalshi serves it:
+
+- **Funding rate history — backfillable.**
+  `GET /trade-api/v2/margin/funding_rates/historical` returns realized 8-hourly
+  settlements. `kalshi_bot.data.perps.backfill_funding` pulls them in one
+  idempotent shot; `--backfill-funding --perp-asset all`. A `funding_rate` of
+  exactly 0 is a real observation, stored as such.
+- **Mark price — not backfillable.** Kalshi publishes no historical mark
+  series, so `poll_perp_marks` snapshots `/margin/markets` in the same
+  foreground, causal, honest-gap loop as BRTI (`observed_at` from each entry's
+  `settlement_mark_price.ts_ms`); `--poll-perp-marks --perp-asset all`.
+
+Prices are **per contract** (a BTC perp contract is 0.0001 BTC);
+`contract_size` is stored on every mark row. `start_capture.bat` runs a funding
+backfill plus a ~3-hour mark poll each cycle — shorter than the 6-hour BRTI
+poll, because BRTI is load-bearing for the current KXBTC15M verdict and perp
+marks are ahead-of-need. Live-verified read-only: a 7-day funding backfill
+persisted 42 rows across `KXBTCPERP` / `KXETHPERP`; a 45-second mark poll
+persisted 12 honest rows across BTC/ETH/SOL perps.
 
 ### The capture plan
 
