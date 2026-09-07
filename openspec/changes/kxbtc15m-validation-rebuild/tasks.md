@@ -194,8 +194,52 @@
       HOLD reasons, YES/NO entry on drift with a cheap price, injected-calibrator flow-
       through, and `min_edge` gating. Full suite 413 passed, ruff + pyright clean, no new
       dependencies.
-- [ ] 4.4 Reimplement trend and pullback features on short-horizon BRTI/perpetual data, and report their incremental out-of-sample value against the settlement-aware baseline.
-- [ ] 4.5 Add separately labeled experiments for microprice, public-trade imbalance, and quarter-hour opening effects; defer each when the required data coverage is insufficient.
+- [x] 4.4 Reimplement trend and pullback features on short-horizon BRTI/perpetual data,
+      and report their incremental out-of-sample value against the settlement-aware
+      baseline.
+
+      **Done — feature + strategy-variant side; the incremental-value *report* is run at
+      §4.6 through Codex's §3.4 report over the same harness.**
+      - New `src/kalshi_bot/signals/short_horizon_trend.py` (pure, storage-free, causal —
+        readings <= now_ts only): `build_trend_features` returns `slope_per_sec` (OLS
+        slope of BRTI vs. time — the natural `drift_per_sec` estimate for the baseline
+        model), `return_over_lookback`, `trend_z` (return / windowed realized vol — move
+        size vs. noise), and a `pullback_fraction` / `pullback_direction` pair (how far
+        BRTI has retraced from the window's extreme, and whether that extreme was a high
+        or a low). Every field is None when history is insufficient — never a substituted
+        zero.
+      - New `src/kalshi_bot/strategy/short_horizon_trend.py`:
+        `TrendConditionedSettlementStrategy` = the §4.2/§4.3 settlement strategy with ONE
+        change — it feeds the baseline probability model `slope_per_sec * drift_scale` as
+        `drift_per_sec` instead of a fixed 0, and optionally HOLDs against an established
+        trend (`max_adverse_trend_z`) or when chasing with no pullback
+        (`min_pullback_fraction`). `use_trend_drift=False` makes it byte-for-byte the
+        plain baseline — the control arm for §4.6's comparison. Trend inputs ride on
+        `Decision.model_meta["trend"]`. No sizing here (same contract as the baseline).
+      - design.md's rule is honoured structurally: trend "cannot trade merely because
+        direction is positive" — it only shifts the baseline's own probability and can
+        only *subtract* trades via the gates; §4.6 decides whether it earns its keep.
+      11 unit tests (`tests/unit/test_short_horizon_trend.py`): OLS slope recovers a known
+      ramp, flat series → no trend_z, insufficient-history → None, future-reading
+      exclusion, pullback fraction of a known up-move; and the variant entering on trend
+      drift, `use_trend_drift=False` ≡ baseline, the chasing gate, base-HOLD pass-through,
+      and base-config overrides.
+
+- [x] 4.5 Add separately labeled experiments for microprice, public-trade imbalance, and
+      quarter-hour opening effects; defer each when the required data coverage is
+      insufficient.
+
+      **Done — all three DEFERRED, explicitly, with reasons.** New
+      `src/kalshi_bot/strategy/experiments/__init__.py`: an `ExperimentStatus(name,
+      available, reason)` for each of `microprice`, `public_trade_imbalance`,
+      `quarter_hour_open_effect`, all `available=False` right now because their inputs
+      do not exist yet — no `OrderBookSnapshot` (L2) rows, no `PublicTrade` rows (both
+      need `scripts/capture_session.py` imports, §1.4), and the archived BRTI series is
+      not dense enough at KXBTC15M window opens. `deferred_experiments()` returns the list
+      for the walk-forward report to print, so a deferral is never silent; when capture
+      sessions accumulate the data, each flips to `available=True` and gets a real builder.
+      3 unit tests (`tests/unit/test_experiments.py`). Full suite 427 passed, ruff +
+      pyright clean, no new dependencies.
 - [ ] 4.6 Run reproducible KXBTC15M-only validation and document whether any candidate satisfies the promotion gate.
 
 ## 5. Perpetual Isolation and Execution Safety
