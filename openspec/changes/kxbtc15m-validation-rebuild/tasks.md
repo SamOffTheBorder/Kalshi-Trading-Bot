@@ -143,8 +143,57 @@
       the Phi(0)=0.5 symmetric case, a hand-computed normal-CDF value, the determined
       zero-seconds case, and the no-volatility → None guard. Full suite 395 passed,
       ruff + pyright clean, no new dependencies (`scipy.stats.norm` already in use).
-- [ ] 4.2 Build a train-fold-only calibrated probability baseline and persist model/version/input metadata with each estimate.
-- [ ] 4.3 Compare calibrated fair probability with side-specific executable prices and full expected friction before emitting a trade candidate.
+- [x] 4.2 Build a train-fold-only calibrated probability baseline and persist
+      model/version/input metadata with each estimate.
+
+      **Done.** New `src/kalshi_bot/strategy/settlement_prob.py`:
+      - `Calibrator` protocol (`.version`, `.calibrate(raw_p) -> float`), an
+        `IdentityCalibrator` (default no-op), and an `IsotonicCalibrator` fitted by the
+        pool-adjacent-violators algorithm on `(raw_probability, realized_outcome)` pairs.
+        It groups by raw probability first (sorting on x only — never tie-breaking on the
+        outcome, which would hand PAV an already-monotone 0s-then-1s block and defeat the
+        pooling), then pools. Monotone by construction, so it can only correct the LEVEL,
+        never re-order the model's ranking; linear-interpolated between knots, clamped to
+        the fitted range outside it. `IsotonicCalibrator.fit(...)` returns an
+        `IdentityCalibrator` (still a valid `Calibrator`) when given < 10 points.
+      - **Train-fold-only by construction**: the strategy takes an injected `calibrator`
+        (default identity); the §3.3 walk-forward harness fits the isotonic calibrator on
+        PRIOR folds' `(raw, outcome)` pairs and injects it for the current test fold, so
+        the test-fold probability is calibrated with no peeking. Coordination note for
+        Codex left in `codex-notes-for-claude.md`.
+      - **Metadata persisted with each estimate**: added `Decision.model_meta`
+        (JSON-primitive dict) and `record_signal` now folds it into the persisted signal
+        `context` blob. Every `settlement_prob` decision carries `model`,
+        `raw_probability`, `calibrated_probability`, `calibrator_version`, `reference_avg`,
+        `drift_so_far`, `seconds_remaining`, `realized_vol_per_sec`.
+      - `StrategyContext.brti_readings` added (default empty) as the strategy's input.
+
+- [x] 4.3 Compare calibrated fair probability with side-specific executable prices and
+      full expected friction before emitting a trade candidate.
+
+      **Done** in the same module. `SettlementProbStrategy.evaluate`:
+      1. builds `SettlementWindowFeatures` (§4.1) from `context.brti_readings`; HOLDs on
+         `no_brti_readings`, `outside_time_window` (config'd min/max seconds remaining),
+         or `baseline_probability_unavailable`;
+      2. runs the baseline `settlement_probability` and passes it through the calibrator;
+      3. computes the **side-specific** executable price — YES at `yes_ask`, NO at
+         `100 - yes_bid` — and the post-friction EV per contract for each side:
+         `p*(1-c) - (1-p)*c - entry_fee_rate(c) - exit_fee_rate(c)`, both fees at the
+         versioned `FeeConfig` taker coefficient (FULL friction: entry fee **and** a
+         modelled exit-leg fee, since a real stop/target exit pays a second taker fee);
+      4. emits BUY_YES / BUY_NO for whichever side's edge clears `min_edge`, with a
+         side-consistent `fair_probability`, an entry band (`±entry_band_cents`) so the
+         engine rejects a materially worse fill, and the model metadata; otherwise
+         `edge_below_threshold` HOLD.
+      No sizing here — the strategy only emits probability + direction + band, exactly as
+      design.md's "Separate prediction from execution and sizing" requires.
+
+      25 unit tests across `test_settlement_window.py` (13, §4.1) and
+      `test_settlement_prob.py` (12): calibrator monotonicity, the overconfident-model
+      correction, out-of-range clamping, insufficient-data fallback; and the strategy's
+      HOLD reasons, YES/NO entry on drift with a cheap price, injected-calibrator flow-
+      through, and `min_edge` gating. Full suite 413 passed, ruff + pyright clean, no new
+      dependencies.
 - [ ] 4.4 Reimplement trend and pullback features on short-horizon BRTI/perpetual data, and report their incremental out-of-sample value against the settlement-aware baseline.
 - [ ] 4.5 Add separately labeled experiments for microprice, public-trade imbalance, and quarter-hour opening effects; defer each when the required data coverage is insufficient.
 - [ ] 4.6 Run reproducible KXBTC15M-only validation and document whether any candidate satisfies the promotion gate.

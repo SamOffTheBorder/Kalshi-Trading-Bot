@@ -50,6 +50,7 @@ def record_signal(
                 "yes_ask_cents": context.yes_ask_cents,
                 "minutes_to_expiry": context.minutes_to_expiry,
                 "extras": context.extras,
+                "model_meta": decision.model_meta,
             }
         ),
     )

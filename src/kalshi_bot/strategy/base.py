@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from kalshi_bot.signals.settlement_window import BRTIReading
 from kalshi_bot.strategy.levels import SpotBar
 
 
@@ -56,6 +57,14 @@ class StrategyContext:
     # series (strategy/levels.py). Empty for strategies that don't need bar
     # history (e.g. crypto_mispricing, which only looks at `spot`/`vol_annual`).
     spot_bars: tuple[SpotBar, ...] = field(default_factory=tuple)
+
+    # Timestamped BRTI index readings covering (at least) this window's open
+    # 60 s averaging period through `now_ts`, oldest first, filtered by the
+    # caller to only those usable at/<= `now_ts` (kxbtc15m-validation-rebuild
+    # §4.1/§4.2). The settlement-aware strategy builds its
+    # SettlementWindowFeatures from this; empty for strategies that don't use
+    # BRTI (all the pre-§4 ones).
+    brti_readings: tuple[BRTIReading, ...] = field(default_factory=tuple)
 
     # room for later signal inputs (sentiment, forecasts) without breaking the protocol
     extras: dict[str, float] = field(default_factory=dict)
@@ -131,6 +140,14 @@ class Decision:
     # (not these) opts out of engine-level intrabar exit simulation.
     stop_price_cents: int | None = None
     target_price_cents: int | None = None
+
+    # Free-form, JSON-serializable model metadata for the audit trail
+    # (kxbtc15m-validation-rebuild §4.2: "persist model/version/input
+    # metadata with each estimate"). Primitives only — str / int / float /
+    # bool / None and dicts/lists of those — so `record_signal` can fold it
+    # straight into the persisted context blob. Empty for strategies that
+    # don't produce it.
+    model_meta: dict[str, object] = field(default_factory=dict)
 
 
 @runtime_checkable
