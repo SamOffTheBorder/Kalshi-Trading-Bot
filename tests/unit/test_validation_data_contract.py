@@ -6,6 +6,7 @@ from kalshi_bot.signals.fees import (
     entry_fee_dollars,
 )
 from kalshi_bot.storage import create_all_tables
+from kalshi_bot.storage.migrations import SCHEMA_VERSION
 
 
 def test_documented_taker_fee_example():
@@ -26,10 +27,12 @@ def test_fresh_database_has_observation_tables_and_versions():
     create_all_tables(engine)
     tables = set(inspect(engine).get_table_names())
     assert {
-        "candles", "kalshi_markets", "order_book_snapshots", "public_trades", "brti_observations"
+        "candles", "kalshi_markets", "order_book_snapshots", "public_trades", "brti_observations",
+        "perp_mark_observations", "perp_funding_observations",
+        "perp_funding_estimate_observations",
     } <= tables
     with engine.connect() as conn:
-        assert conn.execute(text("PRAGMA user_version")).scalar_one() == 1
+        assert conn.execute(text("PRAGMA user_version")).scalar_one() == SCHEMA_VERSION
 
 
 def test_populated_legacy_database_upgrade_is_additive():

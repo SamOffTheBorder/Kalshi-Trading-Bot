@@ -1,0 +1,34 @@
+{% extends "_base.html" %}
+{% block title %}Markets — Kalshi Bot{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Asset admission</h2>
+  <div class="table-scroll"><table><thead><tr><th>Asset</th><th>Domain</th><th>Cadence</th><th>State</th><th>Blocker</th></tr></thead><tbody>
+  {% for item in admissions %}<tr><td>{{ item.asset_id }}</td><td>{{ item.domain }}</td><td>{{ item.cadence or '—' }}</td><td>{% if item.eligible and item.source_aligned %}<span class="badge badge-ok">eligible</span>{% elif item.discovered %}<span class="badge badge-warn">blocked</span>{% else %}<span class="badge badge-idle">configured</span>{% endif %}</td><td class="mono">{{ item.blocker or '—' }}</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="panel panel-hero">
+  <h2>Instrument map</h2>
+  <p class="panel-sub">Sports betting, perpetuals, and prediction markets share the operator dashboard while keeping data and execution boundaries explicit.</p>
+</section>
+
+<div class="market-grid">
+  {% for area in areas %}
+    <a class="market-card" href="{% if area.key == 'sports' %}/sports{% elif area.key == 'perps' %}/perps{% else %}/prediction-markets{% endif %}">
+      <div class="market-card-head">
+        <h2>{{ area.label }}</h2>
+        <span class="badge {% if area.status in ['captured', 'archived'] %}badge-ok{% elif area.status == 'research' %}badge-warn{% else %}badge-info{% endif %}">{{ area.status }}</span>
+      </div>
+      <p>{{ area.description }}</p>
+      <div class="market-card-stat"><strong>{{ "{:,}".format(area.rows) }}</strong><span>tracked records</span></div>
+      <div class="stat-note">{{ area.detail }}</div>
+      <div class="market-card-link">Open section →</div>
+    </a>
+  {% endfor %}
+</div>
+
+<section class="panel">
+  <h2>Safety boundary</h2>
+  <p class="panel-sub">These pages report measured archive and capture state. A visible market family is not an authorization to place paper or live orders.</p>
+</section>
+{% endblock %}

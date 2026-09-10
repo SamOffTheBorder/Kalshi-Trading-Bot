@@ -10,13 +10,17 @@ from kalshi_bot.config.crypto_registry import (
 
 
 def test_shipped_registry_has_expected_modes_and_btc_series():
+    assert tuple(asset.asset_id for asset in DEFAULT_CRYPTO_REGISTRY) == (
+        "BTC", "ETH", "SOL", "XRP"
+    )
     assert get_asset("BTC").instrument("15m").series_ticker == "KXBTC15M"
     assert get_asset("ETH").instrument("15m").lifecycle == "backtest"
     assert all(
         get_asset(asset).instrument("60m").lifecycle == "observe"
-        for asset in ("SOL", "XRP", "DOGE", "BNB", "HYPE", "NEAR", "ZEC")
+        for asset in ("SOL", "XRP")
     )
-    assert get_asset("LINK").event_instruments == {}
+    assert get_asset("BTC").perp.market_ticker == "KXBTCPERP"
+    assert get_asset("XRP").perp.reference_index == "XRPUSD_RTI"
 
 
 def test_duplicate_assets_and_series_are_rejected():

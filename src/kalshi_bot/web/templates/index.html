@@ -1,60 +1,219 @@
 {% extends "_base.html" %}
+{% block title %}Overview — Kalshi Bot{% endblock %}
 {% block content %}
-<section class="panel">
+
+{#  Panel order is deliberate: an operator opening this page asks, in order,
+    "is it trading?", "is it allowed to trade yet?", "is data still arriving?".
+    Backtest detail comes last because it changes on the scale of days. #}
+
+<section class="panel panel-hero">
   <h2>Trading control</h2>
-  <p class="muted">
-    {% if paper_trading %}Paper trading mode.{% else %}LIVE trading mode.{% endif %}
-    No live-trading process exists yet (§4-§7 not built) — Start records operator
-    intent only; there is nothing live to arm.
+  <p class="panel-sub">
+    {% if paper_trading %}Paper trading mode — no real money at risk.
+    {% else %}<strong>LIVE mode</strong> — real money.{% endif %}
+    Trading always starts stopped; arming is an explicit click.
   </p>
-  {% include "_control_status.html" %}
-  <div class="controls">
-    <button hx-post="/control/arm" hx-target="#control-status" hx-swap="outerHTML" class="btn btn-start">
-      Start
-    </button>
-    <button hx-post="/control/kill" hx-target="#control-status" hx-swap="outerHTML" class="btn btn-kill">
-      KILL SWITCH
-    </button>
+
+  <div class="control-row">
+    {% include "_control_status.html" %}
+    <div class="controls">
+      {#  Plain form POSTs, not htmx: the kill switch must work with no
+          network and no scripting. #}
+      <form method="post" action="/control/arm">
+        <button class="btn btn-start" type="submit"
+                {% if not readiness.is_ready %}disabled
+                title="Validation gate has not passed — see Validation readiness below"{% endif %}>
+          Start
+        </button>
+      </form>
+      <form method="post" action="/control/kill">
+        <button class="btn btn-kill" type="submit">KILL SWITCH</button>
+      </form>
+    </div>
+  </div>
+
+  <p class="panel-sub" style="margin-top:14px; margin-bottom:0">
+    No live-trading process exists yet — there is no loop, paper broker or
+    order router built. Start records operator intent only; it does not place
+    orders.
+  </p>
+</section>
+
+<section class="panel">
+  <h2>Validation readiness</h2>
+  <p class="panel-sub">
+    The promotion gate needs {{ "%.0f"|format(readiness.required_days) }} days of
+    contiguous BRTI history ({{ fold_geometry }}). This is measured, not estimated.
+  </p>
+
+  <div class="progress" role="progressbar"
+       aria-valuenow="{{ "%.0f"|format(readiness.pct_complete) }}"
+       aria-valuemin="0" aria-valuemax="100">
+    <div class="progress-bar" style="width: {{ "%.2f"|format(readiness.pct_complete) }}%"></div>
+  </div>
+  <div class="progress-legend">
+    <span>{{ "%.1f"|format(readiness.brti_span_days) }} d captured</span>
+    <span>{{ "%.1f"|format(readiness.pct_complete) }}%</span>
+    <span>{{ "%.0f"|format(readiness.required_days) }} d needed</span>
+  </div>
+
+  <div class="stat-grid" style="margin-top:16px">
+    <div class="stat">
+      <div class="stat-label">Days remaining</div>
+      <div class="stat-value {{ 'ok' if readiness.is_ready else 'warn' }}">
+        {{ "%.0f"|format(readiness.days_remaining) }}
+      </div>
+      <div class="stat-note">
+        {% if readiness.projected_ready_ts %}
+          if capture runs unbroken
+        {% else %}
+          window complete
+        {% endif %}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">BRTI ∩ market history</div>
+      <div class="stat-value {{ 'bad' if readiness.overlap_days < 1 else 'warn' }}">
+        {{ "%.1f"|format(readiness.overlap_days) }} d
+      </div>
+      <div class="stat-note">only overlap is evaluable</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Markets in overlap</div>
+      <div class="stat-value">{{ "{:,}".format(readiness.markets_in_overlap) }}</div>
+      <div class="stat-note">KXBTC15M contracts</div>
+    </div>
+  </div>
+
+  {% if readiness.overlap_days < 2 %}
+    <div class="callout" style="margin-top:14px">
+      <strong>Why backtests currently take zero trades.</strong>
+      BRTI capture began recently, but the archived KXBTC15M contract history is
+      much older. Only the overlap can be evaluated — outside it the strategy
+      holds on <code>no_brti_readings</code>. A run can therefore report a
+      million evaluations and no entries without anything being broken.
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Paper &amp; shadow runs — all domains</h2>
+  <p class="panel-sub">
+    Every recorded paper/shadow run, newest first. Ledgers stay separated by domain;
+    the health column folds in reconciliation state, so "quiet" and "blocked" read differently.
+  </p>
+  {% if paper_runs %}
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Run</th><th>Domain</th><th>Mode</th><th>Status</th><th class="num">Decisions</th><th class="num">Fills</th><th>Health</th><th>Blockers</th></tr></thead>
+      <tbody>
+        {% for r in paper_runs %}
+        <tr>
+          <td class="mono">{{ r.run_id }}</td>
+          <td>{{ r.domain }}</td>
+          <td>{{ r.mode }}</td>
+          <td>{{ r.status }}</td>
+          <td class="num mono">{{ r.decisions }}</td>
+          <td class="num mono">{{ r.fills }}</td>
+          <td>{% if r.healthy %}<span class="badge badge-ok">healthy</span>{% else %}<span class="badge badge-warn">attention</span>{% endif %}</td>
+          <td class="stat-note">
+            {%- if r.blocks_new_entries %}entries blocked{% endif -%}
+            {%- if r.unresolved_reconciliation %} · unresolved: {{ r.unresolved_reconciliation | join(", ") }}{% endif -%}
+            {%- if not r.blocks_new_entries and not r.unresolved_reconciliation %}—{% endif -%}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="placeholder">No paper or shadow runs recorded yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Capture feeds</h2>
+  <p class="panel-sub">
+    Live freshness of every feed <code>start_capture.bat</code> maintains.
+    A feed going quiet is the failure mode that has cost this project the most data.
+  </p>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Feed</th>
+          <th>Status</th>
+          <th class="num">Rows</th>
+          <th class="num">Span</th>
+          <th class="num">Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in feeds %}
+          <tr>
+            <td>
+              <div>{{ f.name }}</div>
+              <div class="stat-note">{{ f.detail }}</div>
+            </td>
+            <td>
+              {% if f.status == "live" %}<span class="badge badge-ok">live</span>
+              {% elif f.status == "late" %}<span class="badge badge-warn">late</span>
+              {% elif f.status == "stale" %}<span class="badge badge-fail">stale</span>
+              {% else %}<span class="badge badge-idle">empty</span>{% endif %}
+            </td>
+            <td class="num mono">{{ "{:,}".format(f.rows) }}</td>
+            <td class="num mono">
+              {% if f.span_hours >= 48 %}{{ "%.1f"|format(f.span_hours / 24) }} d
+              {% else %}{{ "%.1f"|format(f.span_hours) }} h{% endif %}
+            </td>
+            <td class="num mono">{{ f.age_s | humanize_age }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </section>
 
 <section class="panel">
-  <h2>Validation status</h2>
-  <table class="compact">
-    <tbody>
-      <tr><th>Run</th><td>{% if validation.run_id %}#{{ validation.run_id }} — {{ validation.strategy_name }}{% else %}— no runs yet{% endif %}</td></tr>
-      <tr><th>Evidence class</th>
-        <td>
-          {% if validation.evidence_class == "validation" %}
-            <span class="badge badge-ok">validation</span>
-          {% elif validation.evidence_class %}
-            <span class="badge badge-warn">{{ validation.evidence_class }}</span>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-      <tr><th>Instrument scope</th><td>{{ validation.instrument_scope }}</td></tr>
-      <tr><th>Data window</th>
-        <td>{% if validation.data_start_ts %}{{ validation.data_start_ts }} &ndash; {{ validation.data_end_ts }}{% else %}—{% endif %}</td>
-      </tr>
-      <tr><th>Fee config</th><td>{{ validation.fee_config_version or "—" }}</td></tr>
-      <tr><th>Resolution config</th><td>{{ validation.resolution_config_version or "—" }}</td></tr>
-      <tr><th>Calibrator</th><td>{{ validation.calibrator_version or "—" }}</td></tr>
-      <tr><th>Promotion</th>
-        <td>
-          {% if validation.promotion_status == "passed" %}
-            <span class="badge badge-ok">PASSED</span>
-          {% elif validation.promotion_status == "failed" %}
-            <span class="badge badge-fail">FAILED</span>
-          {% elif validation.promotion_status == "not_evaluated" %}
-            <span class="badge badge-warn">not evaluated</span>
-          {% else %}—{% endif %}
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <h2>Validation evidence</h2>
+  <div class="grid-2">
+    <table class="compact">
+      <tbody>
+        <tr><th scope="row">Run</th>
+          <td>{% if validation.run_id %}#{{ validation.run_id }} — {{ validation.strategy_name }}{% else %}<span class="muted">no runs yet</span>{% endif %}</td></tr>
+        <tr><th scope="row">Evidence class</th>
+          <td>
+            {% if validation.evidence_class == "validation" %}<span class="badge badge-ok">validation</span>
+            {% elif validation.evidence_class %}<span class="badge badge-warn">{{ validation.evidence_class }}</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        <tr><th scope="row">Instrument scope</th><td>{{ validation.instrument_scope }}</td></tr>
+        <tr><th scope="row">Promotion</th>
+          <td>
+            {% if validation.promotion_status == "passed" %}<span class="badge badge-ok">passed</span>
+            {% elif validation.promotion_status == "failed" %}<span class="badge badge-fail">failed</span>
+            {% elif validation.promotion_status == "not_evaluated" %}<span class="badge badge-warn">not evaluated</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <table class="compact">
+      <tbody>
+        <tr><th scope="row">Fee config</th><td class="mono">{{ validation.fee_config_version or "—" }}</td></tr>
+        <tr><th scope="row">Resolution config</th><td class="mono">{{ validation.resolution_config_version or "—" }}</td></tr>
+        <tr><th scope="row">Calibrator</th><td class="mono">{{ validation.calibrator_version or "—" }}</td></tr>
+        <tr><th scope="row">Data window</th>
+          <td class="mono">{% if validation.data_start_ts %}{{ validation.data_start_ts | ts_date }} → {{ validation.data_end_ts | ts_date }}{% else %}—{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
   {% if validation.promotion_reasons %}
-    <p class="muted">Blocking reasons:</p>
-    <ul class="muted">
+    <h3 style="margin-top:16px">Blocking reasons</h3>
+    <ul class="muted" style="margin:0; padding-left:18px">
       {% for r in validation.promotion_reasons %}<li>{{ r }}</li>{% endfor %}
     </ul>
   {% endif %}
@@ -63,104 +222,79 @@
 <section class="panel">
   <h2>Latest backtest run</h2>
   {% if run %}
-    <p><strong>{{ run.strategy_name }}</strong> — run #{{ run.id }}, {{ run.status }}</p>
-    <p class="muted">{{ run.created_at }}</p>
+    <p class="panel-sub">
+      <strong>{{ run.strategy_name }}</strong> — run #{{ run.id }},
+      {{ run.status }} · {{ run.created_at }}
+    </p>
     <div class="grid-2">
       <div>
-        <h3>Train metrics</h3>
+        <h3>Train</h3>
         <pre>{{ run.metrics_train | tojson(indent=2) if run.metrics_train else "—" }}</pre>
       </div>
       <div>
-        <h3>Test (out-of-sample) metrics</h3>
+        <h3>Test (out-of-sample)</h3>
         <pre>{{ run.metrics_test | tojson(indent=2) if run.metrics_test else "—" }}</pre>
       </div>
     </div>
   {% else %}
-    <p class="muted">No backtest runs yet. Run <code>scripts/run_backtest.py</code>.</p>
+    <p class="empty">No backtest runs yet. Run <code>scripts/run_validation.py</code>.</p>
   {% endif %}
 </section>
 
 <section class="panel">
-  <h2>Equity curve (reconstructed from settled trades)</h2>
+  <h2>Equity curve</h2>
   {% if equity and equity|length > 1 %}
-    <table class="compact">
-      <thead><tr><th>Step</th><th>Equity (USD)</th></tr></thead>
-      <tbody>
-      {% for point in equity %}
-        <tr><td>{{ loop.index0 }}</td><td>${{ "%.2f"|format(point.equity_usd) }}</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    {{ equity | equity_sparkline }}
+    <div class="progress-legend" style="margin-top:6px">
+      <span>start ${{ "%.2f"|format(equity[0].equity_usd) }}</span>
+      <span>{{ equity|length }} settled trades</span>
+      <span>end ${{ "%.2f"|format(equity[-1].equity_usd) }}</span>
+    </div>
   {% else %}
-    <p class="muted">No settled trades yet for this run.</p>
+    <p class="empty">No settled trades yet for this run.</p>
   {% endif %}
 </section>
 
 <section class="panel">
-  <h2>Recent decisions (including HOLDs)</h2>
+  <h2>Recent decisions</h2>
+  <p class="panel-sub">Includes HOLDs — the reason column is where a silent strategy explains itself.</p>
   {% if signals %}
-    <table>
-      <thead>
-        <tr><th>Time</th><th>Market</th><th>Action</th><th>Edge</th><th>Confidence</th><th>Reason</th></tr>
-      </thead>
-      <tbody>
-      {% for s in signals %}
-        <tr class="{{ 'row-hold' if s.action == 'HOLD' else 'row-trade' }}">
-          <td>{{ s.evaluated_at_ts }}</td>
-          <td>{{ s.market_ticker }}</td>
-          <td>{{ s.action }}</td>
-          <td>{{ "%.3f"|format(s.fee_adjusted_edge) if s.fee_adjusted_edge is not none else "—" }}</td>
-          <td>{{ "%.2f"|format(s.confidence) if s.confidence is not none else "—" }}</td>
-          <td>{{ s.hold_reason or "—" }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Market</th><th>Action</th><th class="num">Edge</th><th class="num">Conf.</th><th>Reason</th></tr>
+        </thead>
+        <tbody>
+        {% for s in signals %}
+          <tr class="{{ 'row-hold' if s.action == 'HOLD' else 'row-trade' }}">
+            <td class="mono">{{ s.evaluated_at_ts | ts_time }}</td>
+            <td class="mono">{{ s.market_ticker }}</td>
+            <td>
+              {% if s.action == 'HOLD' %}<span class="badge badge-idle">hold</span>
+              {% else %}<span class="badge badge-info">{{ s.action|lower }}</span>{% endif %}
+            </td>
+            <td class="num mono">{{ "%.3f"|format(s.fee_adjusted_edge) if s.fee_adjusted_edge is not none else "—" }}</td>
+            <td class="num mono">{{ "%.2f"|format(s.confidence) if s.confidence is not none else "—" }}</td>
+            <td class="muted">{{ s.hold_reason or "—" }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% else %}
-    <p class="muted">No signals recorded yet.</p>
+    <p class="empty">No signals recorded yet.</p>
   {% endif %}
 </section>
 
 <section class="panel">
-  <h2>Live positions / orders / brackets / funding / liquidation distance</h2>
+  <h2>Live positions &amp; AI commentary</h2>
   <p class="placeholder">
-    No live-trading process is running. The authenticated client, risk layer,
-    settlement-aware strategy, and perp ledger now exist, but nothing is
-    executing against them yet — paper trading (§10) has not been started.
-    This panel populates once a paper/live run is active; it does not fake
-    data. Unresolved execution state (open orders recovered on restart,
-    unconfirmed emergency closes) surfaces here when there is a run to report.
+    Nothing is executing. The authenticated client, risk layer, settlement-aware
+    strategy and perp ledger all exist, but no paper or live trading loop has
+    been built to drive them — so there are no positions, orders, brackets,
+    funding accruals or per-trade AI verdicts to show. This panel stays empty
+    rather than displaying fabricated data.
   </p>
 </section>
 
-<section class="panel">
-  <h2>AI commentary</h2>
-  <p class="placeholder">
-    The local veto model (§7.1) and forecast interface (§7.2) exist; per-trade
-    verdicts appear here once a paper/live run records them.
-  </p>
-</section>
-
-<section class="panel">
-  <h2>BTC data coverage</h2>
-  {% if coverage is none %}
-    <p class="muted">Computing coverage over the full candle history (first load only, ~1-2 min)&hellip; refresh shortly.</p>
-  {% else %}
-    <table class="compact">
-      <thead><tr><th>Series</th><th>Candles</th><th>Periods</th><th>First</th><th>Last</th><th>Gaps</th></tr></thead>
-      <tbody>
-      {% for c in coverage %}
-        <tr>
-          <td>{{ c.series_ticker }}</td>
-          <td>{{ c.total_candles }}</td>
-          <td>{{ c.distinct_periods }}</td>
-          <td>{{ c.first_dt }}</td>
-          <td>{{ c.last_dt }}</td>
-          <td>{{ c.gaps|length }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  {% endif %}
-</section>
 {% endblock %}

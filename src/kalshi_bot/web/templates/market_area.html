@@ -1,0 +1,84 @@
+{% extends "_base.html" %}
+{% block title %}{{ area.label }} — Kalshi Bot{% endblock %}
+{% block content %}
+<section class="panel panel-hero">
+  <div class="market-card-head">
+    <div>
+      <h2>{{ area.label }}</h2>
+      <p class="panel-sub">{{ area.description }}</p>
+    </div>
+    <span class="badge {% if area.status in ['captured', 'archived'] %}badge-ok{% elif area.status == 'research' %}badge-warn{% else %}badge-info{% endif %}">{{ area.status }}</span>
+  </div>
+  <div class="stat-grid">
+    <div class="stat"><div class="stat-label">Tracked records</div><div class="stat-value">{{ "{:,}".format(area.rows) }}</div><div class="stat-note">measured in the schema of record</div></div>
+    <div class="stat"><div class="stat-label">Latest observation</div><div class="stat-value">{{ area.last_ts | ts_time }}</div><div class="stat-note">exchange observation time</div></div>
+  </div>
+</section>
+
+{% if admissions %}
+<section class="panel">
+  <h2>Per-asset admission</h2>
+  <p class="panel-sub">BTC / ETH / SOL / XRP. An asset is <em>eligible</em> only with a fresh, source-aligned, verified discovery snapshot — a stale or unverified snapshot shows its blocker.</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Asset</th><th>Cadence</th><th>Discovered</th><th>Source&nbsp;aligned</th><th>Lifecycle</th><th>Eligible</th><th>Blocker</th></tr></thead>
+    <tbody>
+    {% for a in admissions %}
+      <tr>
+        <td>{{ a.asset_id }}</td>
+        <td>{{ a.cadence or "—" }}</td>
+        <td>{{ "yes" if a.discovered else "no" }}</td>
+        <td>{{ "yes" if a.source_aligned else "no" }}</td>
+        <td>{{ a.lifecycle }}</td>
+        <td>{% if a.eligible %}<span class="badge badge-ok">eligible</span>{% else %}<span class="badge badge-warn">no</span>{% endif %}</td>
+        <td>{{ a.blocker or "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Paper &amp; shadow runs</h2>
+  {% if paper_runs %}
+  <div class="table-scroll"><table>
+    <thead><tr><th>Run</th><th>Mode</th><th>Status</th><th>Started</th><th>Decisions</th><th>Fills</th><th>Health</th><th>Blockers</th></tr></thead>
+    <tbody>
+    {% for r in paper_runs %}
+      <tr>
+        <td>{{ r.run_id }}</td>
+        <td>{{ r.mode }}</td>
+        <td>{{ r.status }}</td>
+        <td>{{ r.started_at | ts_time }}</td>
+        <td>{{ r.decisions }}</td>
+        <td>{{ r.fills }}</td>
+        <td>{% if r.healthy %}<span class="badge badge-ok">healthy</span>{% else %}<span class="badge badge-warn">attention</span>{% endif %}</td>
+        <td>
+          {%- if r.blocks_new_entries %}entries blocked{% endif -%}
+          {%- if r.unresolved_reconciliation %} · unresolved: {{ r.unresolved_reconciliation | join(", ") }}{% endif -%}
+          {%- if not r.blocks_new_entries and not r.unresolved_reconciliation %}—{% endif -%}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+  <p class="placeholder">No paper or shadow runs recorded for this domain yet.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Research state</h2>
+  <p class="panel-sub">{{ area.detail }}</p>
+  {% if area.key == 'sports' %}
+    <p class="placeholder">Sports is discovery and foreground-capture only. Supported scope is two-outcome, single-game contracts; futures, props, parlays, and ambiguous rules stay out of validation.</p>
+    <p><a class="btn btn-start" href="/operations">Open sports research controls</a></p>
+  {% elif area.key == 'perps' %}
+    <p class="placeholder">Perpetual marks and funding are isolated from event-contract positions. No execution loop is implied by these observations.</p>
+    <p><a class="btn btn-start" href="/data">View capture health</a></p>
+  {% else %}
+    <p class="placeholder">Prediction-market validation remains fee-aware and holdout-gated. The existing event-contract backtests and promotion evidence are available from the overview and runs pages.</p>
+    <p><a class="btn btn-start" href="/runs">View backtest runs</a></p>
+  {% endif %}
+</section>
+{% endblock %}

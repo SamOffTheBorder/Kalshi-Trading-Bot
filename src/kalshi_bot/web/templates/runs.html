@@ -1,28 +1,42 @@
 {% extends "_base.html" %}
+{% block title %}Backtest runs — Kalshi Bot{% endblock %}
 {% block content %}
 <section class="panel">
   <h2>Backtest runs</h2>
+  <p class="panel-sub">Most recent first. Evidence class separates a real walk-forward validation from a diagnostic run.</p>
   {% if runs %}
-    <table>
-      <thead><tr><th>ID</th><th>Strategy</th><th>Created</th><th>Status</th><th>Test Sharpe</th></tr></thead>
-      <tbody>
-      {% for run in runs %}
-        <tr>
-          <td>{{ run.id }}</td>
-          <td>{{ run.strategy_name }}</td>
-          <td>{{ run.created_at }}</td>
-          <td>{{ run.status }}</td>
-          <td>
-            {% if run.metrics_test and run.metrics_test.sharpe is defined %}
-              {{ "%.2f"|format(run.metrics_test.sharpe) }}
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="num">ID</th><th>Strategy</th><th>Evidence</th>
+            <th>Created</th><th>Status</th><th class="num">Test Sharpe</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for run in runs %}
+          <tr>
+            <td class="num mono">{{ run.id }}</td>
+            <td>{{ run.strategy_name }}</td>
+            <td>
+              {% if run.evidence_class == "validation" %}<span class="badge badge-ok">validation</span>
+              {% elif run.evidence_class %}<span class="badge badge-warn">{{ run.evidence_class }}</span>
+              {% else %}<span class="muted">—</span>{% endif %}
+            </td>
+            <td class="mono">{{ run.created_at }}</td>
+            <td>{{ run.status }}</td>
+            <td class="num mono">
+              {% if run.metrics_test and run.metrics_test.sharpe is defined %}
+                {{ "%.2f"|format(run.metrics_test.sharpe) }}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% else %}
-    <p class="muted">No backtest runs recorded yet.</p>
+    <p class="empty">No backtest runs recorded yet.</p>
   {% endif %}
 </section>
 {% endblock %}

@@ -40,7 +40,7 @@ check-in can lose data once it rolls off Kalshi's ~6-week window).
       300 candles over 20 markets, 0 gaps. `KXBTC15M` is now just another entry
       in the series list (see 1.1a/1.5) — no dedicated near-real-time collector
       required.
-- [ ] 1.4 Extend archiver to perps: mark price, funding rate history, and the current
+- [x] 1.4 Extend archiver to perps: mark price, funding rate history, and the current
       funding estimate (`/margin` funding endpoints). **Blocked on §4, not just
       ordered after it — verified live (2026-09-04) that every `/margin` endpoint
       requires authenticated RSA-PSS-signed requests (`/margin-rest/market/*`,
@@ -48,6 +48,13 @@ check-in can lose data once it rolls off Kalshi's ~6-week window).
       event-contract data has. `execution/kalshi_client.py`'s signer (§4.1) must
       exist first.** Do not build a throwaway signer here — do this once, in §4,
       correctly.
+      **Done (2026-09-08).** `data/perps/` now persists foreground mark snapshots,
+      idempotently backfills realized funding, and captures the current funding estimate
+      through authenticated read-only `/margin` endpoints. The estimate is stored with the
+      exchange `computed_time` and local receipt time, so it cannot leak future knowledge;
+      duplicate exchange timestamps are ignored. `capture_session.py` exposes
+      `--capture-funding-estimates`, and `start_capture.bat` includes it in each manual
+      cycle. No order endpoint is called by any capture path.
 - [x] 1.5 Backfill `KXBTC15M` as far as the API allows; record honestly how far back that
       reaches (may be short — this is a newer series). **Done — result was
       better than expected.** Full run (no `--max-markets` cap): **6,444

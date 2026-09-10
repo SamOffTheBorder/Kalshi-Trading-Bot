@@ -10,8 +10,12 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from kalshi_bot.data.perps.funding import backfill_funding, resolve_crypto_perp_tickers
-from kalshi_bot.storage.models import Base, PerpFundingObservation
+from kalshi_bot.data.perps.funding import (
+    backfill_funding,
+    capture_funding_estimates,
+    resolve_crypto_perp_tickers,
+)
+from kalshi_bot.storage.models import Base, PerpFundingEstimateObservation, PerpFundingObservation
 
 # 2026-09-06T04:00:00Z .. 2026-09-07T04:00:00Z, 8h spacing
 T0 = 1_788_753_600  # 2026-09-07T04:00:00Z per the live probe
@@ -21,10 +25,11 @@ DAY = 86_400
 class _FakeMarginClient:
     def __init__(
         self, *, rows_by_ticker: dict | None = None, markets: list | None = None,
-        raises_for: tuple[str, ...] = (),
+        estimates_by_ticker: dict | None = None, raises_for: tuple[str, ...] = (),
     ) -> None:
         self._rows = rows_by_ticker or {}
         self._markets = markets or []
+        self._estimates = estimates_by_ticker or {}
         self._raises_for = set(raises_for)
 
     def get_historical_funding_rates(
@@ -37,6 +42,11 @@ class _FakeMarginClient:
 
     def get_markets(self, *, status: str | None = None) -> dict:
         return {"markets": list(self._markets)}
+
+    def get_funding_rate_estimate(self, ticker: str) -> dict:
+        if ticker in self._raises_for:
+            raise RuntimeError("boom")
+        return dict(self._estimates.get(ticker, {}))
 
 
 def _row(ticker, iso, rate, mark="7.96"):
@@ -158,3 +168,58 @@ def test_resolve_crypto_perp_tickers_filters_to_wanted_assets(session):
         "KXETHPERP",
         "KXAAVEPERP",
     }
+
+
+def test_captures_current_funding_estimate_idempotently(session):
+    client = _FakeMarginClient(
+        estimates_by_ticker={
+            "KXBTCPERP": {
+                "market_ticker": "KXBTCPERP",
+                "computed_time": "2026-09-07T05:01:02Z",
+                "funding_rate": "0.000135",
+                "mark_price": "7.96",
+                "next_funding_time": "2026-09-07T12:00:00Z",
+            }
+        }
+    )
+    result = capture_funding_estimates(
+        session, client, tickers=["KXBTCPERP"], session_id="s1", now_fn=lambda: T0 + 7200
+    )
+    assert result.persisted == 1
+    row = session.execute(select(PerpFundingEstimateObservation)).scalar_one()
+    assert row.funding_rate == pytest.approx(0.000135)
+    assert row.mark_price_dollars == "7.96"
+    assert row.next_funding_time == "2026-09-07T12:00:00Z"
+    assert row.available_at >= row.observed_at
+
+    repeated = capture_funding_estimates(
+        session, client, tickers=["KXBTCPERP"], session_id="s2", now_fn=lambda: T0 + 60
+    )
+    assert repeated.persisted == 0
+    assert repeated.duplicates_skipped == 1
+
+
+def test_malformed_or_failed_estimates_do_not_stop_other_tickers(session):
+    client = _FakeMarginClient(
+        estimates_by_ticker={
+            "KXETHPERP": {
+                "market_ticker": "KXETHPERP",
+                "computed_time": "not-a-time",
+                "funding_rate": 0.01,
+            },
+            "KXSOLPERP": {
+                "market_ticker": "KXSOLPERP",
+                "computed_time": "2026-09-07T05:01:02Z",
+                "funding_rate": 0.0,
+            },
+        },
+        raises_for=("KXBTCPERP",),
+    )
+    result = capture_funding_estimates(
+        session,
+        client,
+        tickers=["KXBTCPERP", "KXETHPERP", "KXSOLPERP"],
+        session_id="s",
+        now_fn=lambda: T0,
+    )
+    assert (result.errors, result.malformed_skipped, result.persisted) == (1, 1, 1)

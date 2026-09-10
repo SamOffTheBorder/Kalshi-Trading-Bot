@@ -2,17 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Kalshi Bot Dashboard</title>
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Kalshi Bot{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%233ecf8e'/></svg>">
+  {#  The dashboard deliberately has no JS dependency. The control buttons are
+      plain <form> POSTs, so the kill switch works with no network, no CDN and
+      no scripting — the one control that must never depend on a CDN being up. #}
+  {% block head %}{% endblock %}
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Kalshi Bot</div>
+    <div class="brand"><span class="brand-mark"></span> Kalshi Bot</div>
     <nav>
-      <a href="/">Overview</a>
-      <a href="/runs">Backtest runs</a>
+      <a href="/" class="{{ 'active' if active_page == 'overview' else '' }}">Overview</a>
+      <a href="/markets" class="{{ 'active' if active_page == 'markets' else '' }}">Markets</a>
+      <a href="/sports" class="{{ 'active' if active_page == 'sports' else '' }}">Sports</a>
+      <a href="/perps" class="{{ 'active' if active_page == 'perps' else '' }}">Perpetuals</a>
+      <a href="/prediction-markets" class="{{ 'active' if active_page == 'prediction-markets' else '' }}">Prediction markets</a>
+      <a href="/data" class="{{ 'active' if active_page == 'data' else '' }}">Data &amp; capture</a>
+      <a href="/runs" class="{{ 'active' if active_page == 'runs' else '' }}">Backtest runs</a>
+      <a href="/operations" class="{{ 'active' if active_page == 'operations' else '' }}">Operations</a>
     </nav>
+    <div class="topbar-right">
+      {% if paper_trading is defined %}
+        {% if paper_trading %}
+          <span class="badge badge-info">Paper</span>
+        {% else %}
+          <span class="badge badge-fail">Live</span>
+        {% endif %}
+      {% endif %}
+      <span>{{ now_utc }}</span>
+    </div>
   </header>
   <main>
     {% block content %}{% endblock %}

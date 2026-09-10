@@ -31,3 +31,6 @@ docs-site/.docusaurus/
 .DS_Store
 Thumbs.db
 .vscode/settings.json
+
+# Local agent handoff notes — not part of the project
+CODEX-HANDOFF.md

@@ -1,4 +1,4 @@
-"""Kalshi crypto-perpetual capture: funding history + mark-price snapshots.
+"""Kalshi crypto-perpetual capture: funding, estimates, and mark snapshots.
 
 The perp validation path (``backtest/perp_ledger.py`` §5.1) needs two series
 per market that the binary-event capture does not provide:
@@ -20,7 +20,9 @@ from __future__ import annotations
 
 from kalshi_bot.data.perps.funding import (
     FundingBackfillResult,
+    FundingEstimateCaptureResult,
     backfill_funding,
+    capture_funding_estimates,
     resolve_crypto_perp_tickers,
 )
 from kalshi_bot.data.perps.kalshi_source import (
@@ -38,11 +40,13 @@ from kalshi_bot.data.perps.mark_poll import (
 __all__ = [
     "CallablePerpMarkSource",
     "FundingBackfillResult",
+    "FundingEstimateCaptureResult",
     "KalshiPerpMarkSource",
     "MarkPollResult",
     "PerpMarkReadingRaw",
     "PerpMarkSource",
     "backfill_funding",
+    "capture_funding_estimates",
     "parse_margin_market",
     "poll_perp_marks",
     "resolve_crypto_perp_tickers",

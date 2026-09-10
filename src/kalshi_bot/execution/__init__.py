@@ -7,6 +7,8 @@ from kalshi_bot.execution.broker_protocol import (
     Position,
 )
 from kalshi_bot.execution.order_tracker import OrderTracker, TrackedOrder
+from kalshi_bot.execution.paper_guard import PaperExecutionError, PaperExecutionGuard
+from kalshi_bot.execution.perp_paper import PerpPaperAdapter
 from kalshi_bot.execution.safety import require_linear_hedge_instrument
 
 __all__ = [
@@ -17,6 +19,9 @@ __all__ = [
     "OrderRequest",
     "OrderResult",
     "OrderTracker",
+    "PaperExecutionError",
+    "PaperExecutionGuard",
+    "PerpPaperAdapter",
     "Position",
     "TrackedOrder",
     "require_linear_hedge_instrument",

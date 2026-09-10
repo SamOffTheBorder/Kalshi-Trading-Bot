@@ -6,6 +6,7 @@ from kalshi_bot.discovery.service import (
     EventSeriesDiscovery,
     PerpDiscovery,
     check_event_perp_compatibility,
+    check_source_alignment,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "EventSeriesDiscovery",
     "PerpDiscovery",
     "check_event_perp_compatibility",
+    "check_source_alignment",
 ]

@@ -99,15 +99,23 @@ def test_diagnostic_only_db_still_reports_that_run_as_not_evaluated(session):
 def test_index_route_renders_the_validation_panel(monkeypatch, tmp_path):
     """Smoke test: the index page renders with the new panel present."""
     db = tmp_path / "dash.db"
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db}")
+    monkeypatch.setenv("DB_PATH", str(db))
     monkeypatch.setenv("KALSHI_KEY_ID", "test-key")
 
     from fastapi.testclient import TestClient
 
+    from kalshi_bot.config import settings as settings_mod
     from kalshi_bot.web.app import create_app
 
-    client = TestClient(create_app())
-    resp = client.get("/")
+    # get_settings is lru_cached: without clearing it this test either reads a
+    # sibling test's database or leaks its own into theirs (an order-dependent
+    # failure in the full suite).
+    settings_mod.get_settings.cache_clear()
+    try:
+        client = TestClient(create_app())
+        resp = client.get("/")
+    finally:
+        settings_mod.get_settings.cache_clear()
     assert resp.status_code == 200
-    assert "Validation status" in resp.text
+    assert "Validation evidence" in resp.text
     assert "Promotion" in resp.text

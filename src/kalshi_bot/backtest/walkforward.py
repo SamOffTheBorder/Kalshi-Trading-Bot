@@ -23,8 +23,13 @@ class WalkForwardResult:
 
 
 def rolling_folds(
-    *, start_ts: int, end_ts: int, train_seconds: int, test_seconds: int,
-    embargo_seconds: int = 0, step_seconds: int | None = None,
+    *,
+    start_ts: int,
+    end_ts: int,
+    train_seconds: int,
+    test_seconds: int,
+    embargo_seconds: int = 0,
+    step_seconds: int | None = None,
 ) -> tuple[WalkForwardFold, ...]:
     """Create non-overlapping-in-time test folds with an explicit embargo."""
     if not start_ts < end_ts or train_seconds <= 0 or test_seconds <= 0:
@@ -40,11 +45,57 @@ def rolling_folds(
     while test_start < end_ts:
         test_end = min(test_start + test_seconds, end_ts)
         train_end = test_start - embargo_seconds
-        folds.append(WalkForwardFold(index, test_start - embargo_seconds - train_seconds,
-                                     train_end, test_start, test_end, embargo_seconds))
+        folds.append(
+            WalkForwardFold(
+                index,
+                test_start - embargo_seconds - train_seconds,
+                train_end,
+                test_start,
+                test_end,
+                embargo_seconds,
+            )
+        )
         index += 1
         test_start += step
     return tuple(folds)
+
+
+def purged_walkforward_folds(
+    *,
+    start_ts: int,
+    end_ts: int,
+    train_seconds: int,
+    test_seconds: int,
+    max_lookback_seconds: int,
+    prediction_horizon_seconds: int,
+    expanding: bool = True,
+    step_seconds: int | None = None,
+) -> tuple[WalkForwardFold, ...]:
+    """Chronological folds with an enforced purge at least as wide as leakage risk."""
+    if max_lookback_seconds < 0 or prediction_horizon_seconds < 0:
+        raise ValueError("lookback and prediction horizon must be non-negative")
+    embargo = max_lookback_seconds + prediction_horizon_seconds
+    folds = rolling_folds(
+        start_ts=start_ts,
+        end_ts=end_ts,
+        train_seconds=train_seconds,
+        test_seconds=test_seconds,
+        embargo_seconds=embargo,
+        step_seconds=step_seconds,
+    )
+    if not expanding:
+        return folds
+    return tuple(
+        WalkForwardFold(
+            fold.index,
+            start_ts,
+            fold.train_end_ts,
+            fold.test_start_ts,
+            fold.test_end_ts,
+            fold.embargo_seconds,
+        )
+        for fold in folds
+    )
 
 
 def run_walkforward(
@@ -64,4 +115,10 @@ def run_walkforward(
     return WalkForwardResult(tuple(folds), tuple(reports))
 
 
-__all__ = ["WalkForwardFold", "WalkForwardResult", "rolling_folds", "run_walkforward"]
+__all__ = [
+    "WalkForwardFold",
+    "WalkForwardResult",
+    "purged_walkforward_folds",
+    "rolling_folds",
+    "run_walkforward",
+]

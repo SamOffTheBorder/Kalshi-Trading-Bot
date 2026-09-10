@@ -1,0 +1,130 @@
+{% extends "_base.html" %}
+{% block title %}Data &amp; capture — Kalshi Bot{% endblock %}
+{% block content %}
+
+<section class="panel">
+  <h2>Capture feeds</h2>
+  <p class="panel-sub">
+    Every feed maintained by <code>start_capture.bat</code>. Staleness is measured
+    from the newest observation, so a dead capture window shows here within minutes.
+  </p>
+  <div class="controls" style="margin-bottom:14px">
+    <form method="post" action="/operations/capture/start"><button class="btn btn-start" type="submit" {% if capture_process.running %}disabled{% endif %}>Start all capture feeds</button></form>
+    <form method="post" action="/operations/capture/stop"><button class="btn btn-kill" type="submit" {% if not capture_process.running %}disabled{% endif %}>Stop capture feeds</button></form>
+    <span class="badge {% if capture_process.running %}badge-ok{% else %}badge-idle{% endif %}">{{ "running" if capture_process.running else "stopped" }}</span>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Feed</th><th>Status</th>
+          <th class="num">Rows</th><th class="num">Span</th>
+          <th class="num">First</th><th class="num">Last seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in feeds %}
+          <tr>
+            <td>
+              <div>{{ f.name }}</div>
+              <div class="stat-note">{{ f.detail }}</div>
+            </td>
+            <td>
+              {% if f.status == "live" %}<span class="badge badge-ok">live</span>
+              {% elif f.status == "late" %}<span class="badge badge-warn">late</span>
+              {% elif f.status == "stale" %}<span class="badge badge-fail">stale</span>
+              {% else %}<span class="badge badge-idle">empty</span>{% endif %}
+            </td>
+            <td class="num mono">{{ "{:,}".format(f.rows) }}</td>
+            <td class="num mono">
+              {% if f.span_hours >= 48 %}{{ "%.1f"|format(f.span_hours / 24) }} d
+              {% else %}{{ "%.1f"|format(f.span_hours) }} h{% endif %}
+            </td>
+            <td class="num mono">{{ f.first_ts | ts_date }}</td>
+            <td class="num mono">{{ f.age_s | humanize_age }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if feeds | selectattr("status", "equalto", "stale") | list %}
+    <div class="callout" style="margin-top:14px">
+      <strong>A feed has gone quiet.</strong> If the capture window is closed,
+      reopen it by double-clicking <code>start_capture.bat</code>. Every phase is
+      resumable — nothing already captured is lost, but the silent interval is
+      gone for good (Kalshi's history window is a rolling ~6 weeks, and index
+      readings cannot be backfilled at all).
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Sampling resolution</h2>
+  <p class="panel-sub">
+    KXBTC15M settles on a <strong>60-second average</strong> of BRTI at open and
+    close. If the poll interval is 60 s, each averaging window contains a single
+    sample and the "average" is one point.
+  </p>
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="stat-label">Median BRTI gap</div>
+      <div class="stat-value {{ 'bad' if sampling.median_gap_s and sampling.median_gap_s >= 60 else 'ok' }}">
+        {% if sampling.median_gap_s %}{{ sampling.median_gap_s }}<span style="font-size:14px"> s</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </div>
+      <div class="stat-note">between consecutive readings</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Samples per window</div>
+      <div class="stat-value {{ 'bad' if sampling.mean_per_window < 2 else 'ok' }}">
+        {{ "%.1f"|format(sampling.mean_per_window) }}
+      </div>
+      <div class="stat-note">mean, per 60 s settlement window</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Gaps &gt; 5 min</div>
+      <div class="stat-value {{ 'warn' if sampling.long_gaps else 'ok' }}">{{ sampling.long_gaps }}</div>
+      <div class="stat-note">capture interruptions</div>
+    </div>
+  </div>
+  {% if sampling.median_gap_s and sampling.mean_per_window < 2 %}
+    <div class="callout" style="margin-top:14px">
+      <strong>One sample per settlement window.</strong> The 60 s average that
+      decides every contract is being estimated from a single reading. Since
+      KXBTC15M is decided in the last fraction of a percent of price noise, this
+      sampling error can be the same size as the edge being measured. Lower
+      <code>--interval</code> in <code>start_capture.bat</code> to capture a real average.
+    </div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Contract archive coverage</h2>
+  <p class="panel-sub">1-minute candle history per BTC series. Recomputed on a timer, not per request.</p>
+  {% if coverage is none %}
+    <p class="empty">Computing coverage over the full candle history (first load only, ~1–2 min)… refresh shortly.</p>
+  {% else %}
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>Series</th><th class="num">Candles</th><th class="num">Periods</th><th class="num">First</th><th class="num">Last</th><th class="num">Gaps</th></tr>
+        </thead>
+        <tbody>
+        {% for c in coverage %}
+          <tr>
+            <td class="mono">{{ c.series_ticker }}</td>
+            <td class="num mono">{{ "{:,}".format(c.total_candles) }}</td>
+            <td class="num mono">{{ "{:,}".format(c.distinct_periods) }}</td>
+            <td class="num mono">{{ c.first_dt }}</td>
+            <td class="num mono">{{ c.last_dt }}</td>
+            <td class="num mono">{{ c.gaps|length }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+
+{% endblock %}

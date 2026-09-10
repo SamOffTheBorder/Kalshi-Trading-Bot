@@ -22,8 +22,9 @@ places nothing and touches no ``/orders`` path.
 
 from __future__ import annotations
 
+import math
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -32,7 +33,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from kalshi_bot.storage.models import PerpFundingObservation
+from kalshi_bot.storage.models import PerpFundingEstimateObservation, PerpFundingObservation
 
 
 class _FundingClient(Protocol):
@@ -49,9 +50,13 @@ class _FundingClient(Protocol):
 
     def get_markets(self, *, status: str | None = ...) -> dict[str, Any]: ...
 
+    def get_funding_rate_estimate(self, ticker: str) -> dict[str, Any]: ...
+
 
 SOURCE_LABEL = "kalshi:margin/funding_rates/historical"
 ENDPOINT = "/margin/funding_rates/historical"
+ESTIMATE_SOURCE_LABEL = "kalshi:margin/funding_rates/estimate"
+ESTIMATE_ENDPOINT = "/margin/funding_rates/estimate"
 
 
 @dataclass
@@ -78,6 +83,28 @@ class FundingBackfillResult:
         }
 
 
+@dataclass
+class FundingEstimateCaptureResult:
+    """Outcome of one operator-invoked current-funding-estimate snapshot."""
+
+    tickers: tuple[str, ...] = ()
+    rows_seen: int = 0
+    persisted: int = 0
+    duplicates_skipped: int = 0
+    malformed_skipped: int = 0
+    errors: int = 0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "tickers": list(self.tickers),
+            "rows_seen": self.rows_seen,
+            "persisted": self.persisted,
+            "duplicates_skipped": self.duplicates_skipped,
+            "malformed_skipped": self.malformed_skipped,
+            "errors": self.errors,
+        }
+
+
 def _parse_funding_time(raw: object) -> int | None:
     """`funding_time` is ISO-8601 UTC (e.g. "2026-09-07T04:00:00Z"). Accept an
     epoch int/float too, in case the shape ever changes."""
@@ -101,6 +128,93 @@ def _existing_observed_at(session: Session, ticker: str) -> set[int]:
         )
     ).scalars()
     return set(rows)
+
+
+def _existing_estimate_observed_at(session: Session, ticker: str) -> set[int]:
+    rows = session.execute(
+        select(PerpFundingEstimateObservation.observed_at).where(
+            PerpFundingEstimateObservation.market_ticker == ticker
+        )
+    ).scalars()
+    return set(rows)
+
+
+def _finite_float(value: object) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = float(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def capture_funding_estimates(
+    session: Session,
+    client: _FundingClient,
+    *,
+    tickers: Sequence[str],
+    session_id: str,
+    now_fn: Callable[[], float] = time.time,
+) -> FundingEstimateCaptureResult:
+    """Persist one current funding-estimate snapshot per requested ticker.
+
+    Estimates have no historical endpoint, so this deliberately records only
+    the value readable now. A malformed response or one ticker's read failure
+    is isolated; other tickers are still captured. Repeating a request with
+    the same exchange ``computed_time`` is idempotent.
+    """
+    result = FundingEstimateCaptureResult(tickers=tuple(tickers))
+    for ticker in tickers:
+        fetched_at = int(now_fn())
+        try:
+            body = client.get_funding_rate_estimate(ticker)
+        except Exception as exc:  # one ticker down must not stop the others
+            result.errors += 1
+            logger.warning("funding estimate: {} request failed: {}", ticker, exc)
+            continue
+
+        result.rows_seen += 1
+        if not isinstance(body, dict):
+            result.malformed_skipped += 1
+            continue
+        rate = _finite_float(body.get("funding_rate"))
+        observed_at = _parse_funding_time(body.get("computed_time"))
+        returned_ticker = body.get("market_ticker")
+        if rate is None or observed_at is None or returned_ticker != ticker:
+            result.malformed_skipped += 1
+            logger.warning("funding estimate: {} returned an unusable response", ticker)
+            continue
+
+        already = _existing_estimate_observed_at(session, ticker)
+        if observed_at in already:
+            result.duplicates_skipped += 1
+            continue
+        session.add(
+            PerpFundingEstimateObservation(
+                market_ticker=ticker,
+                observed_at=observed_at,
+                available_at=max(fetched_at, observed_at),
+                funding_rate=rate,
+                mark_price_dollars=(
+                    str(body["mark_price"]) if body.get("mark_price") is not None else None
+                ),
+                next_funding_time=(
+                    str(body["next_funding_time"])
+                    if body.get("next_funding_time") is not None
+                    else None
+                ),
+                source=ESTIMATE_SOURCE_LABEL,
+                capture_session_id=session_id,
+                source_endpoint=ESTIMATE_ENDPOINT,
+                fetched_at=fetched_at,
+                provenance={"operator_run": True},
+            )
+        )
+        result.persisted += 1
+    session.commit()
+    logger.info("funding estimate capture finished: {}", result.as_dict())
+    return result
 
 
 def backfill_funding(
@@ -226,8 +340,12 @@ def resolve_crypto_perp_tickers(
 
 __all__ = [
     "ENDPOINT",
+    "ESTIMATE_ENDPOINT",
+    "ESTIMATE_SOURCE_LABEL",
     "SOURCE_LABEL",
     "FundingBackfillResult",
+    "FundingEstimateCaptureResult",
     "backfill_funding",
+    "capture_funding_estimates",
     "resolve_crypto_perp_tickers",
 ]

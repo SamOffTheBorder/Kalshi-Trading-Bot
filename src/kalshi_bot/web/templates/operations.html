@@ -1,0 +1,30 @@
+{% extends "_base.html" %}
+{% block title %}Operations — Kalshi Bot{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Operator operations</h2>
+  <p class="panel-sub">Run tests, lint, OpenSpec validation, data-tracker checks, and paper-run preflight from this local dashboard. Jobs are allowlisted and never submit exchange orders.</p>
+  <div class="controls operation-buttons">
+    {% for name in operation_names %}
+      <form method="post" action="/operations/{{ name }}"><button class="btn btn-start" type="submit">Run {{ name|replace('_', ' ') }}</button></form>
+    {% endfor %}
+  </div>
+</section>
+<section class="panel">
+  <h2>Paper engine</h2>
+  <p class="panel-sub">The dashboard owns the KXBTC15M paper process and its shared database.</p>
+  <p>Status: <span class="badge {% if paper_process.running %}badge-ok{% else %}badge-idle{% endif %}">{{ "running" if paper_process.running else "stopped" }}</span>{% if paper_process.pid %} PID {{ paper_process.pid }}{% endif %}</p>
+  <div class="controls">
+    <form method="post" action="/operations/paper/start"><button class="btn btn-start" type="submit" {% if paper_process.running or not paper_trading %}disabled{% endif %}>Start paper engine</button></form>
+    <form method="post" action="/operations/paper/stop"><button class="btn btn-kill" type="submit" {% if not paper_process.running %}disabled{% endif %}>Stop paper engine</button></form>
+  </div>
+</section>
+<section class="panel">
+  <h2>Job history</h2>
+  {% if operations %}
+  <div class="table-scroll"><table><thead><tr><th>Job</th><th>Status</th><th>Exit</th><th>Started</th></tr></thead><tbody>
+  {% for job in operations %}<tr><td><span class="mono">{{ job.id }}</span><br>{{ job.name }}</td><td><span class="badge {% if job.status == 'passed' %}badge-ok{% elif job.status == 'failed' %}badge-fail{% elif job.status == 'running' %}badge-warn{% else %}badge-idle{% endif %}">{{ job.status }}</span></td><td>{{ job.exit_code if job.exit_code is not none else '—' }}</td><td class="mono">{{ job.started_at or 'queued' }}</td></tr>{% if job.output %}<tr><td colspan="4"><pre>{{ job.output }}</pre></td></tr>{% endif %}{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="empty">No operator jobs have been run.</p>{% endif %}
+</section>
+{% endblock %}

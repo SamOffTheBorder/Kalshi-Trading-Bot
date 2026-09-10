@@ -22,6 +22,9 @@ REM    4. poll the nine crypto-perp settlement marks for ~6 hours
 REM       (/margin/markets, read-only authenticated) with the same causal-
 REM       timestamp and honest-gap discipline. Kalshi has no historical mark
 REM       series, so a live poll is the only way to build one.
+REM    5. snapshot the current funding estimate for each crypto perp. Kalshi
+REM       does not serve historical estimates, so this records only what is
+REM       observable at the end of the manually run capture cycle.
 REM  then loops back to step 1.
 REM
 REM  Only BTC (BRTI) feeds the current KXBTC15M validation. The other indices
@@ -65,6 +68,10 @@ REM  Shorter than the BRTI poll: BRTI is the load-bearing feed for the current
 REM  KXBTC15M validation, perp marks are ahead-of-need. Raise --duration here
 REM  (up to match BRTI) once perp validation is the priority.
 uv run python scripts\capture_session.py --poll-perp-marks --perp-asset all --interval 60 --duration 10800
+
+echo.
+echo === %DATE% %TIME%  capturing current crypto-perp funding estimates ===
+uv run python scripts\capture_session.py --capture-funding-estimates --perp-asset all
 
 echo.
 echo === %DATE% %TIME%  cycle done -- gap report ===

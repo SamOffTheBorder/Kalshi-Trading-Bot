@@ -70,7 +70,13 @@ def _event(
     )
 
 
-def _asset(asset: str, lifecycle: LifecycleMode, *, btc: bool = False) -> CryptoAssetConfig:
+def _asset(
+    asset: str,
+    lifecycle: LifecycleMode,
+    *,
+    btc: bool = False,
+    perp_lifecycle: LifecycleMode = "observe",
+) -> CryptoAssetConfig:
     if btc:
         events: dict[Cadence, CryptoInstrumentConfig] = {
             "15m": CryptoInstrumentConfig(
@@ -97,20 +103,18 @@ def _asset(asset: str, lifecycle: LifecycleMode, *, btc: bool = False) -> Crypto
         correlation_group="major-crypto",
         spot_symbols=(f"{asset}-USD",),
         event_instruments=events,
+        perp=CryptoPerpConfig(
+            market_ticker=f"KX{asset}PERP",
+            reference_index=f"{asset}USD_RTI",
+        ),
     )
 
 
 DEFAULT_CRYPTO_REGISTRY: tuple[CryptoAssetConfig, ...] = (
-    _asset("BTC", "live", btc=True),
+    _asset("BTC", "backtest", btc=True),
     _asset("ETH", "backtest"),
-    *(_asset(asset, "observe") for asset in ("SOL", "XRP", "DOGE", "BNB", "HYPE", "NEAR", "ZEC")),
-    CryptoAssetConfig(
-        asset_id="LINK",
-        display_name="LINK",
-        correlation_group="major-crypto",
-        spot_symbols=("LINK-USD",),
-        event_instruments={},
-    ),
+    _asset("SOL", "observe"),
+    _asset("XRP", "observe"),
 )
 
 

@@ -260,9 +260,7 @@ class PerpMarkObservation(Base):
 
     __tablename__ = "perp_mark_observations"
     __table_args__ = (
-        UniqueConstraint(
-            "market_ticker", "observed_at", name="uq_perp_mark_ticker_observed"
-        ),
+        UniqueConstraint("market_ticker", "observed_at", name="uq_perp_mark_ticker_observed"),
         Index("ix_perp_mark_ticker_available", "market_ticker", "available_at"),
     )
 
@@ -305,9 +303,7 @@ class PerpFundingObservation(Base):
 
     __tablename__ = "perp_funding_observations"
     __table_args__ = (
-        UniqueConstraint(
-            "market_ticker", "observed_at", name="uq_perp_funding_ticker_observed"
-        ),
+        UniqueConstraint("market_ticker", "observed_at", name="uq_perp_funding_ticker_observed"),
         Index("ix_perp_funding_ticker_observed", "market_ticker", "observed_at"),
     )
 
@@ -323,6 +319,505 @@ class PerpFundingObservation(Base):
     capture_session_id: Mapped[str | None] = mapped_column(String(64))
     source_endpoint: Mapped[str | None] = mapped_column(String(256))
     fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class RawMarketArtifact(Base):
+    """Immutable source artifact metadata for reproducible external history."""
+
+    __tablename__ = "raw_market_artifacts"
+    __table_args__ = (
+        UniqueConstraint("source", "content_sha256", "parser_version", name="uq_raw_artifact_hash"),
+        Index("ix_raw_artifacts_instrument", "venue", "native_symbol", "retrieved_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    # primary|secondary|manual_comparison
+    source_role: Mapped[str] = mapped_column(String(24), nullable=False)
+    venue: Mapped[str] = mapped_column(String(32), nullable=False)
+    native_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_type: Mapped[str] = mapped_column(String(16), nullable=False)  # spot|perp|trades|book
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    retrieved_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_version: Mapped[str | None] = mapped_column(String(128))
+    # verified|missing|rejected
+    checksum_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="accepted")
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+
+class NormalizedMarketBar(Base):
+    """Normalized OHLCV bar retaining source and causal availability."""
+
+    __tablename__ = "normalized_market_bars"
+    __table_args__ = (
+        # market_type belongs to the identity: Binance spot and USD-M perp share
+        # a native symbol (BTCUSDT), so without it the two series collide and
+        # only whichever imported first can be stored.
+        UniqueConstraint(
+            "source",
+            "venue",
+            "native_symbol",
+            "market_type",
+            "period_minutes",
+            "open_ts",
+            "parser_version",
+            name="uq_normalized_bar_identity",
+        ),
+        Index("ix_normalized_bars_symbol_ts", "native_symbol", "open_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("raw_market_artifacts.id"), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    venue: Mapped[str] = mapped_column(String(32), nullable=False)
+    native_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    market_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    open_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    close_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    open: Mapped[float] = mapped_column(Float, nullable=False)
+    high: Mapped[float] = mapped_column(Float, nullable=False)
+    low: Mapped[float] = mapped_column(Float, nullable=False)
+    close: Mapped[float] = mapped_column(Float, nullable=False)
+    volume: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieved_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    quality_status: Mapped[str] = mapped_column(String(16), nullable=False, default="accepted")
+
+
+class NormalizedAggregateTrade(Base):
+    """Normalized exchange trade, with unknown aggressor direction preserved."""
+
+    __tablename__ = "normalized_aggregate_trades"
+    __table_args__ = (
+        UniqueConstraint(
+            "source",
+            "venue",
+            "native_symbol",
+            "trade_id",
+            "parser_version",
+            name="uq_normalized_trade_identity",
+        ),
+        Index("ix_normalized_trades_symbol_ts", "native_symbol", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("raw_market_artifacts.id"), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    venue: Mapped[str] = mapped_column(String(32), nullable=False)
+    native_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    market_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(16), nullable=False)
+    trade_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieved_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    aggressor_side: Mapped[str | None] = mapped_column(String(8))
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    quality_status: Mapped[str] = mapped_column(String(16), nullable=False, default="accepted")
+
+
+class DataQualityGap(Base):
+    """An observed missing/invalid interval; gaps are never silently filled."""
+
+    __tablename__ = "data_quality_gaps"
+    __table_args__ = (Index("ix_data_gaps_instrument_ts", "venue", "native_symbol", "start_ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    venue: Mapped[str] = mapped_column(String(32), nullable=False)
+    native_symbol: Mapped[str] = mapped_column(String(64), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    observation_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(128), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="warning")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON)
+
+
+class DatasetManifest(Base):
+    """Frozen input manifest for a training/backtest/paper-admission run."""
+
+    __tablename__ = "dataset_manifests"
+    __table_args__ = (UniqueConstraint("manifest_sha256", name="uq_dataset_manifest_hash"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    asset_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    source_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    start_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    parser_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    config_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="frozen")
+    coverage_summary: Mapped[dict | None] = mapped_column(JSON)
+    filter_rules: Mapped[dict | None] = mapped_column(JSON)
+    artifact_hashes: Mapped[list | None] = mapped_column(JSON)
+    normalized_partitions: Mapped[list | None] = mapped_column(JSON)
+    source_mappings: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PaperRun(Base):
+    """Foreground paper/shadow run identity; never a live-order run."""
+
+    __tablename__ = "paper_runs"
+    __table_args__ = (Index("ix_paper_runs_domain_started", "domain", "started_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    domain: Mapped[str] = mapped_column(String(16), nullable=False)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    asset_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+    started_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    ended_at: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    config_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64))
+    risk_policy_version: Mapped[str | None] = mapped_column(String(64))
+
+
+class PaperAuditEvent(Base):
+    """Append-only audit trail for every cross-domain paper lifecycle event."""
+
+    __tablename__ = "paper_audit_events"
+    __table_args__ = (Index("ix_paper_audit_run_time", "paper_run_id", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    paper_run_id: Mapped[str] = mapped_column(ForeignKey("paper_runs.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    domain: Mapped[str] = mapped_column(String(16), nullable=False)
+    asset_id: Mapped[str | None] = mapped_column(String(16))
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(256))
+    data_manifest_hash: Mapped[str | None] = mapped_column(String(64))
+    risk_policy_version: Mapped[str | None] = mapped_column(String(64))
+    payload: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PerpPaperPosition(Base):
+    """Independent linear-perpetual paper position; never a binary trade."""
+
+    __tablename__ = "perp_paper_positions"
+    __table_args__ = (Index("ix_perp_position_run_status", "paper_run_id", "status"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    paper_run_id: Mapped[str] = mapped_column(ForeignKey("paper_runs.id"), nullable=False)
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    signed_quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    multiplier: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    realized_pnl_usd: Mapped[float | None] = mapped_column(Float)
+    funding_pnl_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    fee_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class PerpPaperEvent(Base):
+    """Append-only perp fill, mark, funding, margin, bracket, or reconciliation event."""
+
+    __tablename__ = "perp_paper_events"
+    __table_args__ = (Index("ix_perp_event_position_ts", "position_id", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("perp_paper_positions.id"))
+    paper_run_id: Mapped[str] = mapped_column(ForeignKey("paper_runs.id"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    price: Mapped[float | None] = mapped_column(Float)
+    quantity: Mapped[float | None] = mapped_column(Float)
+    funding_rate: Mapped[float | None] = mapped_column(Float)
+    margin_usd: Mapped[float | None] = mapped_column(Float)
+    liquidation_price: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(256))
+    quote_reference: Mapped[dict | None] = mapped_column(JSON)
+    payload: Mapped[dict | None] = mapped_column(JSON)
+
+
+class PerpFundingEstimateObservation(Base):
+    """One point-in-time funding-rate estimate for a Kalshi crypto perp.
+
+    Unlike a realized funding settlement, an estimate changes during the
+    current funding interval and is not recoverable from Kalshi later. The
+    operator capture command records it with the exchange's ``computed_time``
+    as ``observed_at`` and local receipt as ``available_at``. This makes an
+    estimate usable only after the bot could actually have received it.
+    """
+
+    __tablename__ = "perp_funding_estimate_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_ticker", "observed_at", name="uq_perp_funding_estimate_ticker_observed"
+        ),
+        Index("ix_perp_funding_estimate_ticker_available", "market_ticker", "available_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    funding_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    mark_price_dollars: Mapped[str | None] = mapped_column(String(32))
+    next_funding_time: Mapped[str | None] = mapped_column(String(64))
+
+    source: Mapped[str] = mapped_column(String(128), nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    fetched_at: Mapped[int | None] = mapped_column(Integer)
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsSeries(Base):
+    """Immutable-ish point-in-time metadata for a discovered sports series."""
+
+    __tablename__ = "sports_series"
+    __table_args__ = (Index("ix_sports_series_sport_observed", "sport", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    sport: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(String(256))
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsMarketRuleProvenance(Base):
+    """Versioned rules/settlement snapshot used to classify a sports market."""
+
+    __tablename__ = "sports_market_rule_provenance"
+    __table_args__ = (Index("ix_sports_rules_market_observed", "market_ticker", "observed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    settlement_source: Mapped[str | None] = mapped_column(String(256))
+    outcome_shape: Mapped[str | None] = mapped_column(String(32))
+    rules_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class SportsMarketDiscovery(Base):
+    """One screening result per market observation, including rejected rows."""
+
+    __tablename__ = "sports_market_discovery"
+    __table_args__ = (
+        Index("ix_sports_discovery_market_observed", "market_ticker", "observed_at"),
+        Index("ix_sports_discovery_eligible", "eligible", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    sport: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(String(256))
+    event_ticker: Mapped[str | None] = mapped_column(String(64))
+    close_ts: Mapped[int | None] = mapped_column(Integer)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(16))
+    outcome_shape: Mapped[str | None] = mapped_column(String(32))
+    settlement_source: Mapped[str | None] = mapped_column(String(256))
+    fee_metadata: Mapped[dict | None] = mapped_column(JSON)
+    yes_bid_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_cents: Mapped[int | None] = mapped_column(Integer)
+    bid_size: Mapped[float | None] = mapped_column(Float)
+    ask_size: Mapped[float | None] = mapped_column(Float)
+    open_interest: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    spread_cents: Mapped[int | None] = mapped_column(Integer)
+    eligible: Mapped[bool] = mapped_column(nullable=False, default=False)
+    failure_reason: Mapped[str | None] = mapped_column(String(128))
+    rule_provenance_id: Mapped[int | None] = mapped_column(Integer)
+    raw_metadata: Mapped[dict | None] = mapped_column(JSON)
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+
+
+class SportsCandle(Base):
+    """Point-in-time sports candle; kept separate from crypto candles."""
+
+    __tablename__ = "sports_candles"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_ticker", "period_minutes", "end_period_ts", name="uq_sports_candle"
+        ),
+        Index("ix_sports_candles_market_ts", "market_ticker", "end_period_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    period_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_period_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    yes_bid_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_ask_cents: Mapped[int | None] = mapped_column(Integer)
+    yes_bid_size: Mapped[float | None] = mapped_column(Float)
+    yes_ask_size: Mapped[float | None] = mapped_column(Float)
+    volume: Mapped[float | None] = mapped_column(Float)
+    open_interest: Mapped[float | None] = mapped_column(Float)
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsOrderBookSnapshot(Base):
+    """Raw public L2 snapshot with causal exchange and receipt timestamps."""
+
+    __tablename__ = "sports_order_book_snapshots"
+    __table_args__ = (Index("ix_sports_l2_market_available", "market_ticker", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    bids: Mapped[list | dict] = mapped_column(JSON, nullable=False)
+    asks: Mapped[list | dict] = mapped_column(JSON, nullable=False)
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsPublicTrade(Base):
+    """Public sports trade observation."""
+
+    __tablename__ = "sports_public_trades"
+    __table_args__ = (Index("ix_sports_trades_market_available", "market_ticker", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    taker_side: Mapped[str | None] = mapped_column(String(8))
+    trade_id: Mapped[str | None] = mapped_column(String(128))
+    source_endpoint: Mapped[str | None] = mapped_column(String(256))
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsCaptureGap(Base):
+    """An observed missing interval; no synthetic row is inserted."""
+
+    __tablename__ = "sports_capture_gaps"
+    __table_args__ = (Index("ix_sports_gaps_market_start", "market_ticker", "start_ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    observation_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    start_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_interval_s: Mapped[int] = mapped_column(Integer, nullable=False)
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(String(128), nullable=False, default="capture_gap")
+
+
+class SportsFlowFeature(Base):
+    """Versioned anonymous flow feature window used by research only."""
+
+    __tablename__ = "sports_flow_features"
+    __table_args__ = (
+        UniqueConstraint(
+            "market_ticker", "window_end_ts", "feature_version", name="uq_sports_flow_window"
+        ),
+        Index("ix_sports_flow_market_available", "market_ticker", "available_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_start_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_end_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    feature_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    feature_window_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    features: Mapped[dict] = mapped_column(JSON, nullable=False)
+    identity_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unavailable")
+    capture_session_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsEvidenceCard(Base):
+    """Append-only, attributable external evidence observation."""
+
+    __tablename__ = "sports_evidence_cards"
+    __table_args__ = (
+        Index("ix_sports_evidence_market_available", "market_ticker", "available_at"),
+        Index("ix_sports_evidence_source_hash", "provider", "raw_content_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    series_ticker: Mapped[str | None] = mapped_column(String(64))
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(128), nullable=False)
+    endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[int | None] = mapped_column(Integer)
+    publication_at: Mapped[int | None] = mapped_column(Integer)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieved_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    raw_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_domain: Mapped[str | None] = mapped_column(String(256))
+    citations: Mapped[list | None] = mapped_column(JSON)
+    raw_content: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="usable")
+    provenance: Mapped[dict | None] = mapped_column(JSON)
+
+
+class SportsLLMReview(Base):
+    """Auditable structured local/hosted research review; never an order."""
+
+    __tablename__ = "sports_llm_reviews"
+    __table_args__ = (Index("ix_sports_llm_market_available", "market_ticker", "available_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    market_ticker: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_hash: Mapped[str | None] = mapped_column(String(64))
+    citations: Mapped[list | None] = mapped_column(JSON)
+    summary: Mapped[str | None] = mapped_column(Text)
+    classification: Mapped[str | None] = mapped_column(String(32))
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    retrieved_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    raw_output: Mapped[str | None] = mapped_column(Text)
     provenance: Mapped[dict | None] = mapped_column(JSON)
 
 
@@ -516,3 +1011,63 @@ class SimulatedTrade(Base):
     exit_fee_usd: Mapped[float | None] = mapped_column(Float)
     fee_usd: Mapped[float | None] = mapped_column(Float)
     net_pnl_usd: Mapped[float | None] = mapped_column(Float)
+
+
+class EmergencyHaltRecord(Base):
+    """Durable, append-only global emergency-control state (multi-venue §11.4/11.5).
+
+    One row per state change. The current state is the highest-``id`` row: a
+    ``halt`` row halts every paper domain until a later ``resume`` row for the
+    same ``halt_id`` is written by an explicit operator action. A new process
+    start reads the latest row and never clears a halt on its own.
+    """
+
+    __tablename__ = "emergency_halt_records"
+    __table_args__ = (Index("ix_emergency_halt_created", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    halt_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)  # halt | resume
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    # operator | drawdown | daily_loss | consecutive_loss | liquidation |
+    # margin_breach | data_integrity | process_signal | reconciliation
+    reason: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    paper_run_id: Mapped[str | None] = mapped_column(String(64))
+    domain: Mapped[str | None] = mapped_column(String(16))
+    asset_id: Mapped[str | None] = mapped_column(String(16))
+    operator: Mapped[str | None] = mapped_column(String(64))  # required on resume
+    policy_version: Mapped[str | None] = mapped_column(String(64))
+    policy_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    health_snapshot: Mapped[dict | None] = mapped_column(JSON)  # resume: fresh check
+
+
+class LifecycleTransitionRecord(Base):
+    """Auditable promotion/demotion history per asset/domain/candidate (§11.6).
+
+    Never records a transition to ``live``. Promotions carry the frozen
+    data/model/risk fingerprints and the gate results that justified them;
+    demotions carry the trigger that forced the scope back to ``blocked`` or an
+    earlier state. Unrelated scopes are untouched.
+    """
+
+    __tablename__ = "lifecycle_transition_records"
+    __table_args__ = (Index("ix_lifecycle_transition_scope", "scope_key", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope_key: Mapped[str] = mapped_column(String(96), nullable=False)  # ASSET:domain:candidate
+    asset_id: Mapped[str] = mapped_column(String(16), nullable=False)
+    domain: Mapped[str] = mapped_column(String(16), nullable=False)
+    candidate: Mapped[str] = mapped_column(String(64), nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)  # promote | demote
+    from_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    to_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(48), nullable=False)
+    reason: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    operator: Mapped[str | None] = mapped_column(String(64))
+    report_id: Mapped[str | None] = mapped_column(String(64))
+    data_manifest_hash: Mapped[str | None] = mapped_column(String(64))
+    model_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    risk_policy_version: Mapped[str | None] = mapped_column(String(64))
+    gate_results: Mapped[dict | None] = mapped_column(JSON)

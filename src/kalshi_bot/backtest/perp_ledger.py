@@ -127,25 +127,26 @@ class PerpLedgerMetrics:
 def compute_perp_metrics(trades: list[PerpTrade]) -> PerpLedgerMetrics:
     if not trades:
         return PerpLedgerMetrics(
-            n_trades=0, net_pnl_usd=0.0, gross_pnl_usd=0.0, funding_pnl_usd=0.0,
-            fees_usd=0.0, funding_share_of_net=None, avg_return_on_notional=None,
-            worst_trade_pnl_usd=None, max_leverage_used=None,
-            min_distance_to_liquidation=None, n_liquidations=0,
+            n_trades=0,
+            net_pnl_usd=0.0,
+            gross_pnl_usd=0.0,
+            funding_pnl_usd=0.0,
+            fees_usd=0.0,
+            funding_share_of_net=None,
+            avg_return_on_notional=None,
+            worst_trade_pnl_usd=None,
+            max_leverage_used=None,
+            min_distance_to_liquidation=None,
+            n_liquidations=0,
         )
     net = sum(t.net_pnl_usd for t in trades)
     gross = sum(t.gross_pnl_usd for t in trades)
     funding = sum(t.funding_pnl_usd for t in trades)
     fees = sum(t.fees_usd for t in trades)
-    returns = [
-        t.net_pnl_usd / t.entry_notional_usd
-        for t in trades
-        if t.entry_notional_usd > 0
-    ]
+    returns = [t.net_pnl_usd / t.entry_notional_usd for t in trades if t.entry_notional_usd > 0]
     levs = [t.max_leverage_used for t in trades if t.max_leverage_used is not None]
     dists = [
-        t.min_distance_to_liquidation
-        for t in trades
-        if t.min_distance_to_liquidation is not None
+        t.min_distance_to_liquidation for t in trades if t.min_distance_to_liquidation is not None
     ]
     return PerpLedgerMetrics(
         n_trades=len(trades),
@@ -159,8 +160,9 @@ def compute_perp_metrics(trades: list[PerpTrade]) -> PerpLedgerMetrics:
         max_leverage_used=max(levs) if levs else None,
         min_distance_to_liquidation=min(dists) if dists else None,
         n_liquidations=sum(
-            1 for t in trades if t.min_distance_to_liquidation is not None
-            and t.min_distance_to_liquidation <= 0.0
+            1
+            for t in trades
+            if t.min_distance_to_liquidation is not None and t.min_distance_to_liquidation <= 0.0
         ),
     )
 
@@ -213,14 +215,28 @@ def evaluate_perp_promotion(
             f"came within {metrics.min_distance_to_liquidation:.2%} of liquidation; "
             f"floor is {policy.min_distance_to_liquidation:.2%}"
         )
-    if (
-        metrics.max_leverage_used is not None
-        and metrics.max_leverage_used > policy.max_leverage
-    ):
+    if metrics.max_leverage_used is not None and metrics.max_leverage_used > policy.max_leverage:
         reasons.append(
             f"max leverage {metrics.max_leverage_used:.2f}x exceeds {policy.max_leverage:.2f}x"
         )
     return PerpPromotionDecision(not reasons, tuple(reasons))
+
+
+def build_perp_report(
+    trades: list[PerpTrade],
+    *,
+    coverage: dict[str, object] | None = None,
+    policy: PerpPromotionPolicy | None = None,
+) -> dict[str, object]:
+    """Emit a perp-only report with economics, liquidation, coverage, and verdict."""
+    metrics = compute_perp_metrics(trades)
+    decision = evaluate_perp_promotion(metrics, policy)
+    return {
+        "domain": "perp",
+        "metrics": metrics.to_dict(),
+        "coverage": coverage or {},
+        "promotion": decision.to_dict(),
+    }
 
 
 __all__ = [
@@ -230,6 +246,7 @@ __all__ = [
     "PerpPromotionDecision",
     "PerpPromotionPolicy",
     "PerpTrade",
+    "build_perp_report",
     "compute_perp_metrics",
     "evaluate_perp_promotion",
 ]

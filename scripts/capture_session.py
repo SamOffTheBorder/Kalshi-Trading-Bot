@@ -22,6 +22,9 @@ This command never schedules itself and never runs unattended.
   (read-only, authenticated) recording each crypto perp's settlement mark with
   honest ``observed_at`` / ``available_at`` and logged — never filled — gaps.
   Kalshi publishes no historical mark series, so a live poll is the only way.
+- ``--capture-funding-estimates`` takes one authenticated, read-only snapshot
+  of each selected perp's current funding estimate. Estimates are not
+  backfillable, so this records only what is observable at capture time.
 - ``--report`` prints gap analysis for every observation kind.
 """
 
@@ -55,6 +58,7 @@ from kalshi_bot.data.kalshi.parse import parse_candle, parse_market  # noqa: E40
 from kalshi_bot.data.perps import (  # noqa: E402
     KalshiPerpMarkSource,
     backfill_funding,
+    capture_funding_estimates,
     poll_perp_marks,
     resolve_crypto_perp_tickers,
 )
@@ -63,6 +67,7 @@ from kalshi_bot.storage import (  # noqa: E402
     Candle,
     KalshiMarket,
     OrderBookSnapshot,
+    PerpFundingEstimateObservation,
     PerpFundingObservation,
     PerpMarkObservation,
     PublicTrade,
@@ -77,13 +82,14 @@ KINDS = {
     "trade": PublicTrade,
     "perp_mark": PerpMarkObservation,
     "perp_funding": PerpFundingObservation,
+    "perp_funding_estimate": PerpFundingEstimateObservation,
 }
 BRTI_SOURCES = ("kalshi", "fake")
 
 # Asset symbols whose Kalshi crypto perps we capture by default — the nine
 # registry crypto assets. `resolve_crypto_perp_tickers` maps these to live
 # KX<ASSET>PERP tickers (and silently drops any the exchange isn't listing).
-DEFAULT_PERP_ASSETS = ("BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "HYPE", "NEAR", "ZEC")
+DEFAULT_PERP_ASSETS = ("BTC", "ETH", "SOL", "XRP")
 
 
 def import_jsonl(session, path: Path, kind: str, session_id: str) -> int:
@@ -113,7 +119,7 @@ def gap_report(session, kind: str, *, period_seconds: int | None = None) -> dict
     """
     model = KINDS[kind]
     rows = session.execute(select(model).order_by(model.observed_at)).scalars().all()
-    if kind in ("perp_mark", "perp_funding"):
+    if kind in ("perp_mark", "perp_funding", "perp_funding_estimate"):
         by_ticker: dict[str, list[int]] = {}
         for r in rows:
             by_ticker.setdefault(r.market_ticker, []).append(r.observed_at)
@@ -358,8 +364,14 @@ def main() -> None:
         "settlement marks (Ctrl+C or --duration stops it)",
     )
     parser.add_argument(
+        "--capture-funding-estimates", action="store_true",
+        help="take one read-only snapshot of the current funding estimate for each selected "
+        "crypto perp (not backfillable)",
+    )
+    parser.add_argument(
         "--perp-asset", action="append", default=None,
-        help="perp(s) for --backfill-funding / --poll-perp-marks: asset symbol "
+        help="perp(s) for --backfill-funding / --poll-perp-marks / "
+        "--capture-funding-estimates: asset symbol "
         "(BTC, ETH...), full ticker (KXBTCPERP), 'all', or a comma-list. "
         "Repeatable. Default: the nine registry crypto assets.",
     )
@@ -425,6 +437,21 @@ def main() -> None:
                         session_id=session_id,
                     )
                     print("poll_perp_marks=", json.dumps(mres.as_dict(), sort_keys=True))
+        if args.capture_funding_estimates:
+            assets = _parse_perp_assets(args.perp_asset)
+            with _kalshi_margin_client() as client:
+                tickers = resolve_crypto_perp_tickers(client, wanted=assets)
+                if not tickers:
+                    print(f"no active crypto perps match {assets}")
+                else:
+                    print(
+                        f"capturing funding estimates for {len(tickers)} perp(s): "
+                        f"{', '.join(tickers)}"
+                    )
+                    eres = capture_funding_estimates(
+                        session, client, tickers=tickers, session_id=session_id
+                    )
+                    print("capture_funding_estimates=", json.dumps(eres.as_dict(), sort_keys=True))
         if args.report:
             for kind in KINDS:
                 print(json.dumps(gap_report(session, kind), sort_keys=True))
