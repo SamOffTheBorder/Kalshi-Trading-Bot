@@ -17,3 +17,20 @@ def test_features_fail_closed_without_history():
     result = build_underlying_features([], asset_id="SOL", cadence_minutes=15, decision_ts=100)
     assert result.available is False
     assert result.reason == "insufficient_causal_history"
+
+
+def test_source_alignment_is_explicit_metadata():
+    bars = [
+        UnderlyingBar("BTC", 1, i * 60, (i + 1) * 60, 100 + i, (i + 1) * 60)
+        for i in range(3)
+    ]
+    result = build_underlying_features(
+        bars,
+        asset_id="BTC",
+        cadence_minutes=1,
+        decision_ts=180,
+        lookback_bars=2,
+        source_alignment="aligned",
+    )
+
+    assert result.source_alignment == "aligned"

@@ -267,6 +267,10 @@ def test_data_page_renders(client):
     body = client.get("/data").text
     assert "Sampling resolution" in body
     assert "Contract archive coverage" in body
+    assert "BRTI reconstruction coverage" in body
+    # No reconstruction rows exist in this fixture, so the coverage panel
+    # must show "unmeasured" rather than a fabricated passing status.
+    assert "unmeasured" in body
 
 
 def test_market_sections_are_first_class_routes(client):
@@ -297,7 +301,15 @@ def test_controls_redirect_and_toggle_state(client):
 
 
 def test_dashboard_has_no_external_script_dependency(client):
-    """The kill switch must work with no network and no CDN reachable."""
+    """The kill switch must not depend on a CDN or external build artifact."""
     body = client.get("/").text
     assert "unpkg.com" not in body
-    assert "<script" not in body
+    assert '/static/live.js' in body
+
+
+def test_overview_exposes_read_only_live_status_fragment(client):
+    body = client.get("/").text
+    assert 'data-live-url="/fragments/overview-status"' in body
+    fragment = client.get("/fragments/overview-status")
+    assert fragment.status_code == 200
+    assert "refresh is read-only" in fragment.text

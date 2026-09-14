@@ -16,6 +16,28 @@ class ManifestError(ValueError):
     """Raised when a frozen manifest cannot be created or safely reused."""
 
 
+_SOURCE_NATIVE = "source_native"
+_RECONSTRUCTED = "reconstructed"
+_RECOGNIZED_PARTITION_PROVENANCE = frozenset({_SOURCE_NATIVE, _RECONSTRUCTED})
+
+
+def classify_provenance(partition_provenance: dict[str, str]) -> str:
+    """Fail-closed manifest classification (brti-constituent-history §D5).
+
+    A manifest is ``source_native`` only when every partition it enumerates
+    is declared ``source_native``. A manifest with no partitions declared, an
+    unrecognized provenance value, or any ``reconstructed`` partition is
+    ``reconstructed`` -- forgetting to classify a partition blocks promotion
+    rather than permitting it.
+    """
+    if not partition_provenance:
+        return _RECONSTRUCTED
+    values = set(partition_provenance.values())
+    if values <= {_SOURCE_NATIVE}:
+        return _SOURCE_NATIVE
+    return _RECONSTRUCTED
+
+
 def idempotency_key(
     source_id: str,
     native_id: str,
@@ -43,6 +65,8 @@ class ManifestSpec:
     artifact_hashes: tuple[str, ...] = ()
     normalized_partitions: tuple[str, ...] = ()
     source_mappings: dict[str, object] = field(default_factory=dict)
+    partition_provenance: dict[str, str] = field(default_factory=dict)
+    reconstruction_error: dict[str, object] | None = None
 
     def canonical_payload(self) -> dict[str, object]:
         if self.start_ts >= self.end_ts:
@@ -63,6 +87,8 @@ class ManifestSpec:
             "artifact_hashes": sorted(set(self.artifact_hashes or self.source_ids)),
             "normalized_partitions": sorted(set(self.normalized_partitions)),
             "source_mappings": self.source_mappings,
+            "partition_provenance": dict(sorted(self.partition_provenance.items())),
+            "reconstruction_error": self.reconstruction_error,
         }
 
 
@@ -98,10 +124,24 @@ def persist_manifest(session: Session, spec: ManifestSpec, *, created_at: int) -
         normalized_partitions=payload["normalized_partitions"],
         source_mappings=payload["source_mappings"],
         status="frozen",
+        provenance_class=classify_provenance(spec.partition_provenance),
+        reconstruction_error=spec.reconstruction_error,
     )
     session.add(row)
     session.flush()
     return row
+
+
+def manifest_provenance_class(manifest: DatasetManifest) -> str:
+    """Read back a manifest's provenance class, fail-closed on omission.
+
+    A manifest persisted before this field existed, or otherwise missing the
+    value, is treated as ``reconstructed`` rather than assumed safe.
+    """
+    value = manifest.provenance_class
+    if value not in _RECOGNIZED_PARTITION_PROVENANCE:
+        return _RECONSTRUCTED
+    return value
 
 
 def validate_manifest(
@@ -136,8 +176,10 @@ def validate_manifest(
 __all__ = [
     "ManifestError",
     "ManifestSpec",
+    "classify_provenance",
     "idempotency_key",
     "manifest_hash",
+    "manifest_provenance_class",
     "persist_manifest",
     "validate_manifest",
 ]

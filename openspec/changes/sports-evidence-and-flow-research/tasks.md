@@ -26,4 +26,4 @@
 - [x] 4.2 Add report fields for feature/evidence/model versions, hashes, costs, calibration, executable fills, concentration, and drawdown.
 - [x] 4.3 Add a foreground operator command for bounded evidence retrieval and flow-feature generation; prohibit scheduling, restart, and order placement.
 - [x] 4.4 Pre-register the first flow/evidence pilot's series, allowlist, holdout boundary, thresholds, and minimum sample before holdout access.
-- [ ] 4.5 Run the first complete combined report after sufficient data and record `research_promising`, `park`, or `insufficient_data`; keep sports execution disabled.
+- [ ] 4.5 Run the first complete combined report after sufficient data and record `research_promising`, `park`, or `insufficient_data`; keep sports execution disabled. (Blocked by current zero-row `sports_candles` capture; sports execution remains disabled.)

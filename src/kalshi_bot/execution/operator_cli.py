@@ -32,10 +32,12 @@ from datetime import UTC, datetime
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from kalshi_bot.agents.inspection import council_run_details
+from kalshi_bot.agents.profiles import DEFAULT_COUNCIL_PROFILES
 from kalshi_bot.config.settings import Settings
 from kalshi_bot.execution.run_reporting import build_run_health_report
 from kalshi_bot.risk.governance import GlobalEmergencyControl, HealthCheck
-from kalshi_bot.storage import PaperAuditEvent, PaperRun
+from kalshi_bot.storage import CouncilProfileLifecycleRecord, PaperAuditEvent, PaperRun
 from kalshi_bot.web.export import redact_export
 
 # Sub-commands that shell out, and the bounded script argv they map to.
@@ -51,7 +53,7 @@ SHELL_COMMANDS: dict[str, tuple[str, ...]] = {
 }
 
 # Sub-commands handled in-process (no shell).
-NATIVE_COMMANDS = ("health", "reconcile", "halt", "resume")
+NATIVE_COMMANDS = ("health", "reconcile", "halt", "resume", "council", "council-profile")
 
 ALL_COMMANDS = (*SHELL_COMMANDS, *NATIVE_COMMANDS)
 
@@ -129,7 +131,7 @@ class OperatorConsole:
             if command in SHELL_COMMANDS:
                 code = self._run_shell(command, args)
             else:
-                code = getattr(self, f"_cmd_{command}")(args)
+                code = getattr(self, f"_cmd_{command.replace('-', '_')}")(args)
         except OperatorCommandError:
             self._audit(command, args, "rejected", "bad_arguments")
             raise
@@ -194,6 +196,55 @@ class OperatorConsole:
             note=" ".join(args[1:]) or "operator console resume",
         )
         print(json.dumps({"halted": status.halted}, sort_keys=True))
+        return 0
+
+    def _cmd_council(self, args: Sequence[str]) -> int:
+        run_id = self._require_run_id(args)
+        details = council_run_details(self.session, run_id)
+        if details is None:
+            raise OperatorCommandError(f"unknown council run: {run_id}")
+        print(json.dumps(details, indent=2, sort_keys=True))
+        return 0
+
+    def _cmd_council_profile(self, args: Sequence[str]) -> int:
+        profile_id = args[0] if args else None
+        profiles = [
+            profile
+            for profile in DEFAULT_COUNCIL_PROFILES
+            if profile_id is None or profile.profile_id == profile_id
+        ]
+        history = list(
+            self.session.execute(
+                CouncilProfileLifecycleRecord.__table__.select().order_by(
+                    CouncilProfileLifecycleRecord.profile_id,
+                    CouncilProfileLifecycleRecord.id,
+                )
+            ).mappings()
+        )
+        print(
+            json.dumps(
+                {
+                    "profiles": [
+                        {
+                            "profile_id": profile.profile_id,
+                            "version": profile.version,
+                            "domain": profile.domain,
+                            "specialization_pattern": profile.specialization_pattern,
+                            "configured_lifecycle": profile.lifecycle,
+                            "transport": profile.transport,
+                        }
+                        for profile in profiles
+                    ],
+                    "lifecycle_history": [
+                        dict(row)
+                        for row in history
+                        if profile_id is None or row["profile_id"] == profile_id
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
         return 0
 
 

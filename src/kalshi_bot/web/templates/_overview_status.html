@@ -1,0 +1,20 @@
+<div class="live-status-grid" role="status" aria-live="polite">
+  <div>
+    <div class="stat-label">Operator state</div>
+    {% include "_control_status.html" %}
+  </div>
+  <div>
+    <div class="stat-label">Validation</div>
+    {% if readiness.is_ready %}<span class="badge badge-ok">ready</span>
+    {% else %}<span class="badge badge-warn">{{ "%.1f"|format(readiness.pct_complete) }}% captured</span>{% endif %}
+  </div>
+  <div>
+    <div class="stat-label">Feeds</div>
+    <span class="mono">{{ feeds | selectattr("status", "equalto", "live") | list | length }} live</span>
+  </div>
+  <div>
+    <div class="stat-label">Paper/shadow runs</div>
+    <span class="mono">{{ paper_runs | length }}</span>
+  </div>
+</div>
+<div class="stat-note">Updated {{ now_utc }} · refresh is read-only.</div>

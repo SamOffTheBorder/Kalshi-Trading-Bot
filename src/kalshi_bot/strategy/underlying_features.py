@@ -29,6 +29,7 @@ class UnderlyingFeatures:
     sample_count: int
     available: bool
     reason: str
+    source_alignment: str = "unknown"
 
 
 def build_underlying_features(
@@ -38,6 +39,7 @@ def build_underlying_features(
     cadence_minutes: int,
     decision_ts: int,
     lookback_bars: int = 20,
+    source_alignment: str = "unknown",
 ) -> UnderlyingFeatures:
     if lookback_bars < 1:
         raise ValueError("lookback_bars must be positive")
@@ -63,6 +65,7 @@ def build_underlying_features(
             len(usable),
             False,
             "insufficient_causal_history",
+            source_alignment,
         )
     closes = [bar.close for bar in usable[-lookback_bars - 1 :]]
     if any(price <= 0 for price in closes):
@@ -76,6 +79,7 @@ def build_underlying_features(
             len(usable),
             False,
             "invalid_price",
+            source_alignment,
         )
     returns = [math.log(b.close / a.close) for a, b in pairwise(usable[-lookback_bars - 1 :])]
     mean = sum(returns) / len(returns)
@@ -90,6 +94,7 @@ def build_underlying_features(
         len(usable),
         True,
         "ok",
+        source_alignment,
     )
 
 

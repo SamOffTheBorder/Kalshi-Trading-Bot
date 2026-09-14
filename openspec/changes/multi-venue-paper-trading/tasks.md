@@ -42,7 +42,7 @@
 - [x] 5.3 Define per-asset/cadence minimum data coverage, maximum gap, source-lag, and cross-source discrepancy policies as explicit versioned configuration—not embedded constants.
 - [x] 5.4 Implement data-quality and source-alignment verdicts for each BTC/ETH/SOL/XRP asset, including a visible reason for no data, stale data, incompatible index, or unsupported venue.
 - [x] 5.5 Add end-to-end tests constructing a manifest from fixture artifacts, reproducing a report, then verifying that a later artifact revision or missing partition blocks reuse.
-- [ ] 5.6 Produce and review the first non-promotional BTC/ETH/SOL/XRP coverage and source-comparison report; record observed gaps without altering historical data.
+- [x] 5.6 Produce and review the first non-promotional BTC/ETH/SOL/XRP coverage and source-comparison report; record observed gaps without altering historical data. (`SCRATCHPAD/crypto-coverage-source-report.json` records Binance spot/perp coverage for all four assets, Coinbase overlap for BTC/ETH, missing secondary coverage for SOL/XRP, and observed gaps; all results are diagnostic-only.)
 
 ## 6. Crypto registry, Kalshi discovery, and settlement alignment
 
@@ -58,14 +58,14 @@
 
 - [x] 7.1 Define feature interfaces for source-specific 1-minute, 15-minute, and 60-minute BTC/ETH/SOL/XRP spot/perpetual features, preserving availability timestamps and no-incomplete-bar semantics.
 - [x] 7.2 Implement chronological rolling/expanding walk-forward folds with a purge/embargo at least equal to maximum lookback plus prediction horizon.
-- [ ] 7.3 Implement asset-isolated underlying backtests with fixed train/validation/holdout windows, seeds, model/feature/execution config hashes, and frozen manifests.
+- [x] 7.3 Implement asset-isolated underlying backtests with fixed train/validation/holdout windows, seeds, model/feature/execution config hashes, and frozen manifests. (`backtest/underlying.py` freezes a single-use plan hash, enforces purge windows, records lineage, and reports train/validation/holdout metrics.)
 - [x] 7.4 Implement predeclared baselines: no-trade after cost, naïve/market baseline, and a simple non-LLM signal baseline appropriate to each candidate.
-- [ ] 7.5 Extend prediction-contract backtests to consume external underlying features while retaining causal Kalshi quote/rule/outcome execution and source-alignment blocking.
-- [ ] 7.6 Extend perpetual backtests to use the independent linear ledger with bid/ask, multiplier, fees, realized funding, margin, leverage, liquidation-distance, and cost/fill reports.
+- [x] 7.5 Extend prediction-contract backtests to consume external underlying features while retaining causal Kalshi quote/rule/outcome execution and source-alignment blocking. (`BacktestEngine`/`run_validation_arms` accept causal `UnderlyingFeatures` and HOLD when aligned inputs are unavailable or unknown.)
+- [x] 7.6 Extend perpetual backtests to use the independent linear ledger with bid/ask, multiplier, fees, realized funding, margin, leverage, liquidation-distance, and cost/fill reports. (`backtest/perp_ledger.py::simulate_perp_trade` is side-aware, causal, fee/funding-aware, and rejects unsafe leverage/quotes.)
 - [ ] 7.7 Implement report generation for coverage, sample count, calibration/Brier where applicable, expectancy, confidence interval, realised versus modeled costs, fills/rejections, drawdown, funding, and liquidation risk, separated by asset/cadence/domain.
-- [ ] 7.8 Implement the worst-component gate so pooled or aggregate results cannot promote an asset/cadence/domain that fails an individual data, economics, or risk threshold.
-- [ ] 7.9 Preserve LLM boundaries in backtests: accept only captured allowlisted evidence hashes, exclude uncited/untracked output, and prohibit post-holdout threshold/model changes without a new holdout.
-- [ ] 7.10 Add known-answer/regression tests for BTC/ETH/SOL/XRP source selection, unavailable inputs, no look-ahead, fold isolation, BRTI/index alignment, per-domain accounting, and aggregate-pass rejection.
+- [x] 7.8 Implement the worst-component gate so pooled or aggregate results cannot promote an asset/cadence/domain that fails an individual data, economics, or risk threshold. (`ComponentGateResult` is evaluated independently by `promotion_gate.py`; a pooled pass cannot override a failed component.)
+- [x] 7.9 Preserve LLM boundaries in backtests: accept only captured allowlisted evidence hashes, exclude uncited/untracked output, and prohibit post-holdout threshold/model changes without a new holdout. (Underlying signal evidence hashes are allowlist-checked and holdout plans are single-use.)
+- [x] 7.10 Add known-answer/regression tests for BTC/ETH/SOL/XRP source selection, unavailable inputs, no look-ahead, fold isolation, BRTI/index alignment, per-domain accounting, and aggregate-pass rejection. (Registry/source-alignment/perp-isolation coverage plus new causal underlying, external-feature, perp-simulator, and worst-component tests.)
 
 ## 8. Shared paper-run orchestration and binary prediction migration
 
@@ -94,7 +94,7 @@
 
 ## 10. Sports feasibility closure and paper pilot
 
-- [ ] 10.1 Complete the remaining `sports-evidence-and-flow-research` combined report task with sufficient causal sports captures; retain `insufficient_data` or `park` honestly if its threshold is not met.
+- [ ] 10.1 Complete the remaining `sports-evidence-and-flow-research` combined report task with sufficient causal sports captures; retain `insufficient_data` or `park` honestly if its threshold is not met. (Current capture status has 41,246 discovery rows but zero sports candles, so no report is honestly runnable yet.)
 - [ ] 10.2 Select a proposed pre-game, single-game, two-outcome sports pilot only after provider coverage, entitlement, pricing, retention, attribution, rate-limit, and historical-snapshot requirements are reviewed and recorded.
 - [x] 10.3 Implement the approved sports external-provider adapter with allowlist, raw provenance, event/market mapping, causal timestamps, parse/version status, conflicts, and gap reporting. *(`data/sports/provider_adapter.py`: `ProviderEntitlement`/`MarketMapping`/`ProviderRow`, `normalize_observation` (status = parsed/parse_error/unmapped/disallowed_source/stale), `detect_conflicts` with pre-registered resolution priority, `build_gap_report` that reports missing intervals without filling. No concrete provider is selected — that is 10.2.)*
 - [x] 10.4 Add sports paper-admission checks requiring an exact matching `research_promising` report, market rules/official settlement, freshness, liquidity, strategy/model version, provider evidence, and sports risk policy.
@@ -121,7 +121,7 @@
 - [x] 12.4 Implement run-health and reconciliation reports that distinguish no signal, policy block, stale data, missing coverage, execution rejection, and system failure; include domain-separated ledgers and backtest-divergence metrics. *(`execution/run_reporting.py`: `classify_status` maps every adapter decision status to one of the six outcomes (unknown → `policy_block`, never a healthy hold); `build_run_health_report` builds per-domain `DomainLedger`s that never merge, latest-wins reconciliation status with `blocks_new_entries`, and a `DivergenceMetric` block vs. a frozen backtest summary. `tests/unit/test_run_reporting.py`, 8 tests.)*
 - [x] 12.5 Ensure all exports omit secrets and preserve source attribution/retention constraints; test report serialization and redaction.
 - [x] 12.6 Document setup, local data storage, Binance/Coinbase/TradingView roles, Kalshi demo requirement, asset-lifecycle review, source-alignment review, shadow-to-paper promotion, emergency halt, reconciliation, demotion, and rollback procedures.
-- [ ] 12.7 Run lint, type checks, schema migration tests, unit tests, deterministic source/backtest fixtures, and controlled demo-environment integration tests; record versions and any skipped tests.
+- [ ] 12.7 Run lint, type checks, schema migration tests, unit tests, deterministic source/backtest fixtures, and controlled demo-environment integration tests; record versions and any skipped tests. (933 unit tests pass and Ruff passes; full Pyright still reports 72 pre-existing typing errors, and 3 external integration tests remain deselected.)
 - [ ] 12.8 Run and archive first baseline reports for BTC, ETH, SOL, and XRP separately; no report may be marked a promotion pass without its frozen evidence, coverage, and component gates.
 - [ ] 12.9 Conduct operator dry-runs for each domain: safe-start refusal, normal interrupt, emergency halt, restart reconciliation, stale-data failure, and dashboard visibility; record outcomes.
 - [ ] 12.10 Admit only the first asset/domain pair that passes all prerequisite gates to a bounded paper run; keep every other pair in its earned lifecycle state and publish a readiness matrix.

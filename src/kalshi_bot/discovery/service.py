@@ -150,11 +150,30 @@ class PerpDiscovery:
         now = int(self.clock())
         identifier = asset.perp.market_ticker
         try:
-            raw = self.client.get_market(identifier)
+            response = self.client.get_market(identifier)
+            # The margin REST endpoint wraps a single result in `market`,
+            # while the small test/client seam historically returned the
+            # inner object directly. Accept both shapes without weakening
+            # any of the required-field checks below.
+            raw = response.get("market", response) if isinstance(response, dict) else response
+            if not isinstance(raw, dict):
+                raise ValueError("perp_invalid_market_response")
             metadata = {
-                "multiplier": raw.get("multiplier", asset.perp.multiplier),
+                "multiplier": raw.get(
+                    "multiplier", raw.get("contract_size", asset.perp.multiplier)
+                ),
                 "minimum_order_size": raw.get(
-                    "min_order_size", raw.get("minimum_order_size", asset.perp.minimum_order_size)
+                    "min_order_size",
+                    raw.get(
+                        "minimum_order_size",
+                        # The live margin API omits a minimum when fractional
+                        # trading is disabled; one whole contract is the
+                        # conservative, exchange-native interpretation.
+                        1.0
+                        if "fractional_trading_enabled" in raw
+                        and raw.get("fractional_trading_enabled") is False
+                        else asset.perp.minimum_order_size,
+                    ),
                 ),
                 "max_leverage": raw.get("max_leverage", asset.perp.max_leverage),
                 "funding_available": bool(raw.get("funding_available", False)),

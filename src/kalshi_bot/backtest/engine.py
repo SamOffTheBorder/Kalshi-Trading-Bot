@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import bisect
 import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Literal
@@ -62,6 +63,7 @@ from kalshi_bot.storage.models import (
 from kalshi_bot.storage.records import record_signal
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext, StrategyProtocol
 from kalshi_bot.strategy.levels import SpotBar
+from kalshi_bot.strategy.underlying_features import UnderlyingFeatures
 
 # How far back from an evaluation the settlement-aware strategies read BRTI:
 # the full 15-minute KXBTC15M lifetime, the 60 s reference average at the
@@ -138,6 +140,8 @@ class BacktestEngine:
         signal_flush_interval: int = 5_000,
         sizing_mode: Literal["kelly", "fixed_risk"] = "kelly",
         fixed_risk_config: FixedRiskConfig | None = None,
+        underlying_features: tuple[UnderlyingFeatures, ...] = (),
+        require_source_alignment: bool = False,
     ) -> None:
         """`candle_period_minutes` must be finer than the market lifetime:
         hourly markets get exactly one 60-minute candle — timestamped at the
@@ -183,6 +187,8 @@ class BacktestEngine:
         self.fixed_risk_config = fixed_risk_config or (
             FixedRiskConfig() if sizing_mode == "fixed_risk" else None
         )
+        self.underlying_features = tuple(underlying_features)
+        self.require_source_alignment = require_source_alignment
 
     # -- data loading ------------------------------------------------------------
 
@@ -291,6 +297,27 @@ class BacktestEngine:
         rebuilt on every evaluation."""
         idx = bisect.bisect_left(bar_ts, ts)
         return tuple(bars[max(0, idx - max_bars) : idx])
+
+    def _underlying_features_before(
+        self, symbol: str, ts: int
+    ) -> tuple[UnderlyingFeatures, ...]:
+        """Return only feature snapshots causal for this market/asset."""
+        asset_id = symbol.split("-", 1)[0].upper()
+        # Contract tickers carry venue/cadence suffixes (KXBTC15M, KXBTCPERP),
+        # while external feature snapshots use the canonical registry asset
+        # (BTC). Normalize only those known ticker decorations; arbitrary
+        # symbols remain unchanged and therefore fail closed.
+        if asset_id.startswith("KX"):
+            asset_id = re.sub(r"^KX", "", asset_id)
+            asset_id = re.sub(r"(?:15|60)M$", "", asset_id)
+            asset_id = re.sub(r"PERP$", "", asset_id)
+        return tuple(
+            feature
+            for feature in self.underlying_features
+            if feature.asset_id == asset_id
+            and feature.available
+            and feature.asof_ts <= ts
+        )
 
     # -- deferred entry execution ------------------------------------------------
 
@@ -696,8 +723,27 @@ class BacktestEngine:
                     brti_readings=self._brti_before(
                         brti_usable_ts, brti_readings, ts, window_s=_BRTI_SLICE_WINDOW_S
                     ),
+                    underlying_features=self._underlying_features_before(symbol, ts),
                 )
-                decision = self.strategy.evaluate(context)
+                external_features = context.underlying_features
+                if self.require_source_alignment and not external_features:
+                    decision = Decision(
+                        action=Action.HOLD,
+                        market_ticker=market.ticker,
+                        strategy_name=self.strategy.name,
+                        hold_reason="underlying_features_unavailable",
+                    )
+                elif self.require_source_alignment and any(
+                    feature.source_alignment != "aligned" for feature in external_features
+                ):
+                    decision = Decision(
+                        action=Action.HOLD,
+                        market_ticker=market.ticker,
+                        strategy_name=self.strategy.name,
+                        hold_reason="source_alignment_unknown",
+                    )
+                else:
+                    decision = self.strategy.evaluate(context)
                 evaluated += 1
                 signal_row = record_signal(
                     self.session, decision, context, mode="backtest", backtest_run_id=run_row.id

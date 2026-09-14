@@ -1,0 +1,16 @@
+{
+  "asset_ids": [
+    "BTC"
+  ],
+  "end_ts": 1788999059,
+  "manifest_id": 1,
+  "manifest_sha256": "9c2b63236992abddf04f2935eebd20e55cdd8d747ed47dfc2fea29fe79c04014",
+  "provenance_class": "source_native",
+  "reused": false,
+  "source_ids": [
+    "capture:brti:BTC",
+    "capture:spot:BTC"
+  ],
+  "source_native": true,
+  "start_ts": 1721865600
+}

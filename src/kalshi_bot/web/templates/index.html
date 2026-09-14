@@ -39,6 +39,11 @@
   </p>
 </section>
 
+<section class="panel" id="live-overview-status"
+         data-live-url="/fragments/overview-status" data-live-interval-ms="10000">
+  {% include "_overview_status.html" %}
+</section>
+
 <section class="panel">
   <h2>Validation readiness</h2>
   <p class="panel-sub">
@@ -105,21 +110,34 @@
   {% if paper_runs %}
   <div class="table-scroll">
     <table>
-      <thead><tr><th>Run</th><th>Domain</th><th>Mode</th><th>Status</th><th class="num">Decisions</th><th class="num">Fills</th><th>Health</th><th>Blockers</th></tr></thead>
+      <thead><tr><th>Run</th><th>Domain</th><th>Mode</th><th>Strategy</th><th>Gate</th><th>Status</th><th class="num">Decisions</th><th class="num">Fills</th><th>Health</th><th>Blockers</th></tr></thead>
       <tbody>
         {% for r in paper_runs %}
         <tr>
           <td class="mono">{{ r.run_id }}</td>
           <td>{{ r.domain }}</td>
           <td>{{ r.mode }}</td>
+          <td>{{ r.strategy_id or "—" }}</td>
+          <td>
+            {%- if r.strategy_gate_status == "passed" %}<span class="badge badge-ok">passed</span>
+            {%- elif r.strategy_gate_status == "gate_failed" %}<span class="badge badge-warn">gate failed</span>
+            {%- elif r.strategy_gate_status == "parked" %}<span class="badge badge-warn">parked</span>
+            {%- elif r.strategy_gate_status == "never_gated" %}<span class="badge badge-info">never gated</span>
+            {%- else %}<span class="muted">—</span>{% endif -%}
+          </td>
           <td>{{ r.status }}</td>
           <td class="num mono">{{ r.decisions }}</td>
-          <td class="num mono">{{ r.fills }}</td>
+          <td class="num mono">{{ r.fills }}{% if r.decisions_without_fills %} <span class="badge badge-info">recording only</span>{% endif %}</td>
           <td>{% if r.healthy %}<span class="badge badge-ok">healthy</span>{% else %}<span class="badge badge-warn">attention</span>{% endif %}</td>
           <td class="stat-note">
             {%- if r.blocks_new_entries %}entries blocked{% endif -%}
             {%- if r.unresolved_reconciliation %} · unresolved: {{ r.unresolved_reconciliation | join(", ") }}{% endif -%}
-            {%- if not r.blocks_new_entries and not r.unresolved_reconciliation %}—{% endif -%}
+            {%- if r.blocked_fill_reasons %}
+              {%- for asset, reason in r.blocked_fill_reasons.items() %}
+               · {{ asset }}: {{ reason }}
+              {%- endfor %}
+            {%- endif -%}
+            {%- if not r.blocks_new_entries and not r.unresolved_reconciliation and not r.blocked_fill_reasons %}—{% endif -%}
           </td>
         </tr>
         {% endfor %}
@@ -254,6 +272,57 @@
     <p class="empty">No settled trades yet for this run.</p>
   {% endif %}
 </section>
+
+{% if latest_trade_signal %}
+<section class="panel">
+  <h2>Sizing plan</h2>
+  <p class="panel-sub">
+    Event contracts don't carry a resting stop/target the way a perp does —
+    a losing contract's worst case is its full premium. What the engine
+    actually enforces is fixed-fractional risk sizing
+    (<code>risk/fixed_risk.py</code>), shown here worked out against the
+    most recent non-HOLD decision. See <a href="/settings">Settings</a> for
+    the policy that drives this.
+  </p>
+  {% set entry = (latest_trade_signal.market_yes_price or 0) / 100.0 %}
+  {% set worst_case = entry + (entry * risk_config.fee_coefficient) %}
+  {% set risk_dollars = bankroll_total_usd * risk_config.risk_pct %}
+  {% set max_notional = bankroll_total_usd * risk_config.max_position_pct %}
+  {% set sized_qty = (risk_dollars / worst_case) if worst_case > 0 else 0 %}
+  {% set capped_qty = [sized_qty, (max_notional / entry) if entry > 0 else 0] | min %}
+  <div class="plan-grid">
+    <div class="plan-cell">
+      <div class="plan-label">Reference trade</div>
+      <div class="plan-value mono" style="font-size:12.5px">{{ latest_trade_signal.market_ticker }}</div>
+    </div>
+    <div class="plan-cell">
+      <div class="plan-label">Entry ({{ latest_trade_signal.action|lower }})</div>
+      <div class="plan-value">{{ "%.0f"|format(entry * 100) }}¢</div>
+    </div>
+    <div class="plan-cell plan-stop">
+      <div class="plan-label">Worst case (full loss + fees)</div>
+      <div class="plan-value">{{ "%.0f"|format(worst_case * 100) }}¢</div>
+    </div>
+    <div class="plan-cell">
+      <div class="plan-label">Risk budget this trade</div>
+      <div class="plan-value">${{ "%.2f"|format(risk_dollars) }}</div>
+    </div>
+    <div class="plan-cell">
+      <div class="plan-label">Sized quantity</div>
+      <div class="plan-value">{{ "%.0f"|format(capped_qty) }}</div>
+    </div>
+    <div class="plan-cell">
+      <div class="plan-label">Notional cap</div>
+      <div class="plan-value">${{ "%.2f"|format(max_notional) }}</div>
+    </div>
+  </div>
+  <p class="stat-note" style="margin-top:8px">
+    Bankroll assumed: ${{ "%.2f"|format(bankroll_total_usd) }}. This is a
+    worked example from the policy, not a stored per-trade plan — no
+    stop/target is persisted per event-contract trade today.
+  </p>
+</section>
+{% endif %}
 
 <section class="panel">
   <h2>Recent decisions</h2>

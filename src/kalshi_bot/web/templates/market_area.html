@@ -38,25 +38,73 @@
 </section>
 {% endif %}
 
+{% if readiness_matrix %}
+<section class="panel">
+  <h2>Paper-trading readiness</h2>
+  <p class="panel-sub">Independent operator gates are shown separately. A present manifest may still be reconstructed, and a discovered perp may still have stale marks.</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Asset</th><th>Cadence</th><th>Lifecycle</th><th>Manifest</th><th>Discovery</th><th>Mark / BRTI</th><th>Sports report</th><th>Overall</th></tr></thead>
+    <tbody>
+    {% for r in readiness_matrix %}
+      <tr>
+        <td>{{ r.asset_id }}</td>
+        <td>{{ r.cadence or "—" }}</td>
+        <td><span class="badge {% if r.lifecycle in ['shadow', 'paper'] %}badge-ok{% else %}badge-info{% endif %}">{{ r.lifecycle }}</span></td>
+        <td>
+          {% if r.manifest_frozen %}<span class="badge {% if r.manifest_provenance_class == 'source_native' %}badge-ok{% else %}badge-warn{% endif %}">{{ r.manifest_provenance_class or 'unknown' }}</span>
+          {% else %}<span class="badge badge-warn">absent</span>{% endif %}
+        </td>
+        <td>
+          {% if r.discovery_present and r.discovery_eligible and r.discovery_fresh %}<span class="badge badge-ok">fresh</span>
+          {% elif r.discovery_present %}<span class="badge badge-warn">{% if not r.discovery_fresh %}stale{% else %}blocked{% endif %}</span>
+          {% else %}<span class="badge badge-warn">absent</span>{% endif %}
+        </td>
+        <td>
+          {% if r.mark_or_brti_fresh %}<span class="badge badge-ok">fresh</span>
+          {% elif r.mark_or_brti_last_ts is not none %}<span class="badge badge-warn">stale</span>
+          {% else %}<span class="badge badge-warn">absent</span>{% endif %}
+        </td>
+        <td>{% if r.domain == 'sports' %}<span class="badge {% if r.feasibility_outcome == 'research_promising' %}badge-ok{% else %}badge-warn{% endif %}">{{ r.feasibility_outcome or 'absent' }}</span>{% else %}—{% endif %}</td>
+        <td>{% if r.ready %}<span class="badge badge-ok">ready</span>{% else %}<span class="badge badge-warn">gated</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
 <section class="panel">
   <h2>Paper &amp; shadow runs</h2>
   {% if paper_runs %}
   <div class="table-scroll"><table>
-    <thead><tr><th>Run</th><th>Mode</th><th>Status</th><th>Started</th><th>Decisions</th><th>Fills</th><th>Health</th><th>Blockers</th></tr></thead>
+    <thead><tr><th>Run</th><th>Mode</th><th>Strategy</th><th>Gate</th><th>Status</th><th>Started</th><th>Decisions</th><th>Fills</th><th>Health</th><th>Blockers</th></tr></thead>
     <tbody>
     {% for r in paper_runs %}
       <tr>
         <td>{{ r.run_id }}</td>
         <td>{{ r.mode }}</td>
+        <td>{{ r.strategy_id or "—" }}</td>
+        <td>
+          {%- if r.strategy_gate_status == "passed" %}<span class="badge badge-ok">passed</span>
+          {%- elif r.strategy_gate_status == "gate_failed" %}<span class="badge badge-warn">gate failed</span>
+          {%- elif r.strategy_gate_status == "parked" %}<span class="badge badge-warn">parked</span>
+          {%- elif r.strategy_gate_status == "never_gated" %}<span class="badge badge-info">never gated</span>
+          {%- else %}<span class="muted">—</span>{% endif -%}
+        </td>
         <td>{{ r.status }}</td>
         <td>{{ r.started_at | ts_time }}</td>
         <td>{{ r.decisions }}</td>
-        <td>{{ r.fills }}</td>
+        <td>{{ r.fills }}{% if r.decisions_without_fills %} <span class="badge badge-info">recording only</span>{% endif %}</td>
         <td>{% if r.healthy %}<span class="badge badge-ok">healthy</span>{% else %}<span class="badge badge-warn">attention</span>{% endif %}</td>
         <td>
           {%- if r.blocks_new_entries %}entries blocked{% endif -%}
           {%- if r.unresolved_reconciliation %} · unresolved: {{ r.unresolved_reconciliation | join(", ") }}{% endif -%}
-          {%- if not r.blocks_new_entries and not r.unresolved_reconciliation %}—{% endif -%}
+          {%- if r.blocked_fill_reasons %}
+            {%- for asset, reason in r.blocked_fill_reasons.items() %}
+             · <span class="{% if reason == 'reconstructed_data_not_admissible' %}badge badge-warn{% endif %}">{{ asset }}: {{ reason }}</span>
+            {%- endfor %}
+          {%- endif -%}
+          {%- if not r.blocks_new_entries and not r.unresolved_reconciliation and not r.blocked_fill_reasons %}—{% endif -%}
         </td>
       </tr>
     {% endfor %}
@@ -66,6 +114,106 @@
   <p class="placeholder">No paper or shadow runs recorded for this domain yet.</p>
   {% endif %}
 </section>
+
+{% if perp_positions %}
+<section class="panel">
+  <h2>Perpetual paper positions</h2>
+  <p class="panel-sub">
+    Open and recently-closed perp positions with their bracket, funding
+    accrued, and distance to liquidation. Funding PnL is tracked separately
+    from price PnL so a carry result reads as net funding after fees, not a
+    win rate.
+  </p>
+  <div class="table-scroll"><table>
+    <thead><tr>
+      <th>Run</th><th>Asset</th><th class="num">Qty</th><th class="num">Entry</th>
+      <th class="num">Mark</th><th>Status</th><th class="num">Stop / TP</th>
+      <th class="num">Liq&nbsp;dist</th><th class="num">Funding&nbsp;PnL</th>
+      <th class="num">Realized&nbsp;PnL</th><th class="num">Fees</th>
+    </tr></thead>
+    <tbody>
+    {% for p in perp_positions %}
+      <tr>
+        <td class="mono">{{ p.run_id[:12] }}</td>
+        <td>{{ p.asset_id }}</td>
+        <td class="num mono">{{ "%+.4f"|format(p.signed_quantity) }}</td>
+        <td class="num mono">{{ "%.2f"|format(p.entry_price) }}</td>
+        <td class="num mono">{% if p.latest_mark is not none %}{{ "%.2f"|format(p.latest_mark) }}{% else %}—{% endif %}</td>
+        <td>{% if p.status == "open" %}<span class="badge badge-info">open</span>{% elif p.status == "liquidated" %}<span class="badge badge-warn">liquidated</span>{% else %}{{ p.status }}{% endif %}</td>
+        <td class="num mono">
+          {%- if p.stop_loss is not none %}{{ "%.2f"|format(p.stop_loss) }} / {{ "%.2f"|format(p.take_profit) }}{% else %}—{% endif -%}
+        </td>
+        <td class="num mono">
+          {%- if p.liquidation_distance_pct is not none %}{{ "%.1f%%"|format(p.liquidation_distance_pct * 100) }}{% else %}—{% endif -%}
+        </td>
+        <td class="num mono">{{ "%+.2f"|format(p.funding_pnl_usd) }}</td>
+        <td class="num mono">{% if p.realized_pnl_usd is not none %}{{ "%+.2f"|format(p.realized_pnl_usd) }}{% else %}—{% endif %}</td>
+        <td class="num mono">{{ "%.2f"|format(p.fee_usd) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <h2>Trade plans</h2>
+  <p class="panel-sub">
+    Entry, stop, target and current position within that range for each
+    position carrying a full bracket. Pulled from the opening fill's
+    recorded bracket — nothing here is inferred or estimated after the fact.
+  </p>
+  {% set bracketed = perp_positions | selectattr("stop_loss", "ne", none) | list %}
+  {% if bracketed %}
+    {% for p in bracketed %}
+    <div class="plan-card" style="margin-bottom:14px; padding-bottom:14px; {% if not loop.last %}border-bottom:1px solid var(--border-soft);{% endif %}">
+      <div class="market-card-head" style="margin-bottom:2px">
+        <div>
+          <strong>{{ p.asset_id }}</strong> <span class="dim mono">{{ p.market_ticker }}</span>
+          <span class="badge {% if p.is_long %}badge-ok{% else %}badge-fail{% endif %}" style="margin-left:8px">{{ "long" if p.is_long else "short" }}</span>
+        </div>
+        <span class="badge {% if p.status == 'open' %}badge-info{% elif p.status == 'liquidated' %}badge-warn{% else %}badge-idle{% endif %}">{{ p.status }}</span>
+      </div>
+      <div class="plan-grid">
+        <div class="plan-cell plan-stop">
+          <div class="plan-label">Stop loss</div>
+          <div class="plan-value">{{ "%.2f"|format(p.stop_loss) }}</div>
+        </div>
+        <div class="plan-cell">
+          <div class="plan-label">Entry</div>
+          <div class="plan-value">{{ "%.2f"|format(p.entry_price) }}</div>
+        </div>
+        <div class="plan-cell">
+          <div class="plan-label">Current mark</div>
+          <div class="plan-value">{% if p.latest_mark is not none %}{{ "%.2f"|format(p.latest_mark) }}{% else %}—{% endif %}</div>
+        </div>
+        {% if p.take_profit is not none %}
+        <div class="plan-cell plan-target">
+          <div class="plan-label">Take profit</div>
+          <div class="plan-value">{{ "%.2f"|format(p.take_profit) }}</div>
+        </div>
+        {% endif %}
+        <div class="plan-cell">
+          <div class="plan-label">Risk (R)</div>
+          <div class="plan-value">{% if p.r_dollars is not none %}${{ "%.2f"|format(p.r_dollars) }}{% else %}—{% endif %}</div>
+        </div>
+        {% if p.reward_risk_ratio is not none %}
+        <div class="plan-cell">
+          <div class="plan-label">Reward : risk</div>
+          <div class="plan-value">{{ "%.2f"|format(p.reward_risk_ratio) }}R</div>
+        </div>
+        {% endif %}
+      </div>
+      {% if p.plan_progress_pct is not none %}
+      <div class="plan-bar"><div class="plan-marker" style="left: {{ "%.1f"|format(p.plan_progress_pct) }}%"></div></div>
+      <div class="progress-legend"><span>stop</span><span>entry</span><span>target</span></div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="placeholder">No open or recent position carries a recorded stop/target bracket yet.</p>
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="panel">
   <h2>Research state</h2>

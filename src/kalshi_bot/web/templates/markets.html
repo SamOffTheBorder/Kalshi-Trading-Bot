@@ -7,6 +7,18 @@
   {% for item in admissions %}<tr><td>{{ item.asset_id }}</td><td>{{ item.domain }}</td><td>{{ item.cadence or '—' }}</td><td>{% if item.eligible and item.source_aligned %}<span class="badge badge-ok">eligible</span>{% elif item.discovered %}<span class="badge badge-warn">blocked</span>{% else %}<span class="badge badge-idle">configured</span>{% endif %}</td><td class="mono">{{ item.blocker or '—' }}</td></tr>{% endfor %}
   </tbody></table></div>
 </section>
+<section class="panel">
+  <h2>Paper-trading readiness</h2>
+  <div class="table-scroll"><table><thead><tr><th>Asset</th><th>Domain</th><th>Lifecycle</th><th>Manifest</th><th>Discovery</th><th>Mark / BRTI</th><th>Feasibility</th><th>Overall</th></tr></thead><tbody>
+  {% for item in readiness_matrix %}<tr>
+    <td>{{ item.asset_id }}</td><td>{{ item.domain }}</td><td>{{ item.lifecycle }}</td>
+    <td>{{ item.manifest_provenance_class if item.manifest_frozen else 'absent' }}</td>
+    <td>{% if item.discovery_present and item.discovery_fresh %}fresh{% elif item.discovery_present %}stale{% else %}absent{% endif %}</td>
+    <td>{% if item.mark_or_brti_fresh %}fresh{% elif item.mark_or_brti_last_ts is not none %}stale{% else %}absent{% endif %}</td>
+    <td>{{ item.feasibility_outcome or '—' }}</td><td>{{ 'ready' if item.ready else 'gated' }}</td>
+  </tr>{% endfor %}
+  </tbody></table></div>
+</section>
 <section class="panel panel-hero">
   <h2>Instrument map</h2>
   <p class="panel-sub">Sports betting, perpetuals, and prediction markets share the operator dashboard while keeping data and execution boundaries explicit.</p>

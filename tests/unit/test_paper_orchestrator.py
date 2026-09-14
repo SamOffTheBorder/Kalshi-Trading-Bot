@@ -100,12 +100,14 @@ def test_preflight_refuses_unknown_asset():
 
 
 def test_preflight_paper_without_frozen_report_is_decision_only():
-    # BTC ships at lifecycle "backtest" -> not even a decision state, so use a
-    # shadow-mode run which admits any decision-state asset for recording.
+    # BTC 15m is deliberately promoted to shadow so the first paper path can
+    # record decisions before a source-native manifest exists.
     cfg = PaperRunConfig(domain="prediction", assets=("BTC",), mode="shadow")
-    # BTC lifecycle is "backtest" in the default registry -> no decisions.
-    with pytest.raises(PreflightError):
-        run_preflight(_settings(), cfg)
+    result = run_preflight(_settings(), cfg)
+    admission = result.admission("BTC")
+    assert admission is not None
+    assert admission.admitted is True
+    assert admission.may_fill is False
 
 
 def test_preflight_shadow_admits_shadow_lifecycle_for_decisions(monkeypatch):
@@ -157,6 +159,49 @@ def test_preflight_paper_mode_paper_lifecycle_with_report_may_fill():
     adm2 = result_no_report.admission("ETH")
     assert adm2.admitted is True and adm2.may_fill is False
     assert adm2.reason == "no_frozen_admission_report"
+
+
+def test_preflight_refuses_fill_for_reconstructed_manifest():
+    """A frozen report backed by a `reconstructed` manifest is admitted for
+    decision recording but never fills (brti-constituent-history §D5)."""
+    from kalshi_bot.config import crypto_registry as cr
+
+    reg = tuple(
+        a.model_copy(
+            update={
+                "event_instruments": {
+                    k: v.model_copy(update={"lifecycle": "paper"})
+                    for k, v in a.event_instruments.items()
+                }
+            }
+        )
+        if a.asset_id == "ETH"
+        else a
+        for a in cr.DEFAULT_CRYPTO_REGISTRY
+    )
+    cfg = PaperRunConfig(domain="prediction", assets=("ETH",), mode="paper")
+
+    result = run_preflight(
+        _settings(),
+        cfg,
+        registry=reg,
+        frozen_report_present=True,
+        manifest_provenance=lambda _asset_id: "reconstructed",
+    )
+    adm = result.admission("ETH")
+    assert adm is not None and adm.admitted is True
+    assert adm.may_fill is False
+    assert adm.reason == "reconstructed_data_not_admissible"
+
+    result_native = run_preflight(
+        _settings(),
+        cfg,
+        registry=reg,
+        frozen_report_present=True,
+        manifest_provenance=lambda _asset_id: "source_native",
+    )
+    adm2 = result_native.admission("ETH")
+    assert adm2 is not None and adm2.may_fill is True
 
 
 # --------------------------------------------------------------------------

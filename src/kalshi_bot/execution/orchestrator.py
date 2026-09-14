@@ -44,6 +44,24 @@ from kalshi_bot.execution.paper_guard import (
 )
 from kalshi_bot.risk.paper_policy import DEFAULT_RISK_POLICY, RiskPolicy
 from kalshi_bot.storage.models import PaperAuditEvent, PaperRun
+from kalshi_bot.strategy.registry import (
+    DEFAULT_STRATEGY_ID,
+    KNOWN_STRATEGY_IDS,
+    strategy_entry,
+)
+
+# `strategy_id` values that mean "no explicit strategy was pinned" — mapped to
+# the default (hold) rather than refused, so callers predating the registry
+# still work unchanged.
+_UNSET_STRATEGY_IDS: frozenset[str] = frozenset({"unspecified", ""})
+
+
+def resolve_strategy_id(strategy_id: str) -> str:
+    """Normalize a config's `strategy_id`: the legacy sentinels become the
+    default; anything else must be a registered id."""
+    if strategy_id in _UNSET_STRATEGY_IDS:
+        return DEFAULT_STRATEGY_ID
+    return strategy_id
 
 ACTIVE_ASSETS: tuple[str, ...] = ("BTC", "ETH", "SOL", "XRP")
 
@@ -104,6 +122,9 @@ class PreflightResult:
     admissions: tuple[AssetAdmission, ...]
     risk_policy_version: str
     manifest_sha256: str | None
+    strategy_id: str = DEFAULT_STRATEGY_ID
+    strategy_config_version: str | None = None
+    strategy_gate_status: str | None = None
 
     @property
     def any_admitted(self) -> bool:
@@ -189,6 +210,7 @@ def run_preflight(
     registry: Sequence[CryptoAssetConfig] = DEFAULT_CRYPTO_REGISTRY,
     frozen_report_present: bool | Callable[[str], bool] = False,
     data_available: bool | Callable[[str], bool] = True,
+    manifest_provenance: Callable[[str], str | None] | None = None,
     ledger_path=None,
 ) -> PreflightResult:
     """Fail-closed checks before a run starts (§8.4).
@@ -206,6 +228,16 @@ def run_preflight(
     except PaperExecutionError as exc:  # normalize to the preflight failure type
         raise PreflightError(str(exc)) from exc
 
+    # Strategy id is resolved and validated before any registry or market
+    # work — an unknown id must fail with nothing written (§1.3).
+    resolved_strategy_id = resolve_strategy_id(config.strategy_id)
+    if resolved_strategy_id not in KNOWN_STRATEGY_IDS:
+        raise PreflightError(
+            f"unknown_strategy_id: {config.strategy_id!r} is not in the "
+            f"strategy registry ({', '.join(sorted(KNOWN_STRATEGY_IDS))})"
+        )
+    entry = strategy_entry(resolved_strategy_id)
+
     by_id = _registry_by_id(registry)
 
     def _report_ok(asset_id: str) -> bool:
@@ -217,6 +249,14 @@ def run_preflight(
         if callable(data_available):
             return bool(data_available(asset_id))
         return bool(data_available)
+
+    def _manifest_source_native(asset_id: str) -> bool:
+        # Fail-closed: no lookup provided, or the lookup returns anything
+        # other than "source_native", refuses fills rather than permitting
+        # them (brti-constituent-history §D5).
+        if manifest_provenance is None:
+            return True
+        return manifest_provenance(asset_id) == "source_native"
 
     admissions: list[AssetAdmission] = []
     for asset_id in config.assets:
@@ -246,16 +286,22 @@ def run_preflight(
             continue
         # A run may only create fills for a `paper`-lifecycle asset AND only
         # when the run itself is in paper mode AND a frozen admission report
-        # exists. Otherwise the asset is admitted for decision recording only.
+        # exists AND that report's manifest is source-native, not a
+        # reconstructed proxy. Otherwise the asset is admitted for decision
+        # recording only.
         may_fill = (
             lifecycle == "paper"
             and config.mode == "paper"
             and lifecycle in _FILLING_STATES
             and _report_ok(asset_id)
+            and _manifest_source_native(asset_id)
         )
         reason = "admitted_for_paper" if may_fill else "admitted_for_decisions_only"
-        if lifecycle == "paper" and config.mode == "paper" and not _report_ok(asset_id):
-            reason = "no_frozen_admission_report"
+        if lifecycle == "paper" and config.mode == "paper":
+            if not _report_ok(asset_id):
+                reason = "no_frozen_admission_report"
+            elif not _manifest_source_native(asset_id):
+                reason = "reconstructed_data_not_admissible"
         admissions.append(
             AssetAdmission(asset_id, lifecycle, True, may_fill, reason)
         )
@@ -265,6 +311,9 @@ def run_preflight(
         admissions=tuple(admissions),
         risk_policy_version=config.risk_policy.version,
         manifest_sha256=config.manifest_sha256,
+        strategy_id=resolved_strategy_id,
+        strategy_config_version=entry.config_version,
+        strategy_gate_status=entry.gate_status,
     )
     if not result.any_admitted:
         raise PreflightError(
@@ -298,6 +347,7 @@ class PaperOrchestrator:
     registry: Sequence[CryptoAssetConfig] = DEFAULT_CRYPTO_REGISTRY
     frozen_report_present: bool | Callable[[str], bool] = False
     data_available: bool | Callable[[str], bool] = True
+    manifest_provenance: Callable[[str], str | None] | None = None
 
     max_cycles: int | None = None
 
@@ -305,6 +355,16 @@ class PaperOrchestrator:
     _stop: bool = field(default=False, init=False)
 
     # -- lifecycle -------------------------------------------------------
+
+    def request_stop(self) -> None:
+        """Ask the run loop to finish the current cycle and shut down cleanly.
+
+        A public seam for a supervising process (e.g.
+        `scripts/run_strategy_lab.py`) running several orchestrators in
+        threads: the per-process SIGINT handler `_install_signal_handlers`
+        installs only fires on the main thread, so the supervisor forwards
+        the stop by calling this on each child."""
+        self._stop = True
 
     def _install_signal_handlers(self) -> Callable[[], None]:
         """Best-effort SIGINT/SIGTERM handlers that request a clean stop.
@@ -347,6 +407,9 @@ class PaperOrchestrator:
                     config_fingerprint=preflight.guard.config_fingerprint,
                     manifest_sha256=preflight.manifest_sha256,
                     risk_policy_version=preflight.risk_policy_version,
+                    strategy_id=preflight.strategy_id,
+                    strategy_config_version=preflight.strategy_config_version,
+                    strategy_gate_status=preflight.strategy_gate_status,
                 )
             )
             session.commit()
@@ -437,6 +500,7 @@ class PaperOrchestrator:
             registry=self.registry,
             frozen_report_present=self.frozen_report_present,
             data_available=self.data_available,
+            manifest_provenance=self.manifest_provenance,
             ledger_path=None,
         )
         self._create_run_row(preflight)
@@ -457,7 +521,9 @@ class PaperOrchestrator:
                     for a in preflight.admissions
                 ],
                 "config_fingerprint": preflight.guard.config_fingerprint,
-                "strategy_id": self.config.strategy_id,
+                "strategy_id": preflight.strategy_id,
+                "strategy_config_version": preflight.strategy_config_version,
+                "strategy_gate_status": preflight.strategy_gate_status,
                 "config_id": self.config.config_id,
                 "report_id": self.config.report_id,
             },

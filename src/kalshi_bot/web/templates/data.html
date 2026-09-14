@@ -127,4 +127,39 @@
   {% endif %}
 </section>
 
+<section class="panel">
+  <h2>BRTI reconstruction coverage</h2>
+  <p class="panel-sub">
+    Captured BRTI (source-native) vs. the synthetic constituent-venue proxy (reconstructed).
+    These are never the same claim — a reconstructed second never counts as a captured one.
+  </p>
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="stat-label">Captured BRTI rows</div>
+      <div class="stat-value">{{ "{:,}".format(brti_reconstruction.captured_rows) }}</div>
+      <div class="stat-note">source-native, from the authenticated CF Benchmarks passthrough</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Reconstructed seconds</div>
+      <div class="stat-value">{{ "{:,}".format(brti_reconstruction.reconstructed_rows) }}</div>
+      <div class="stat-note">
+        contributing venues: {{ brti_reconstruction.contributing_venues | join(", ") or "—" }}
+      </div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Reconstruction error</div>
+      <div class="stat-value">
+        {% if brti_reconstruction.measurement_status == "measured" %}
+          <span class="badge badge-ok">measured</span>
+        {% else %}
+          <span class="badge badge-warn">unmeasured</span>
+        {% endif %}
+      </div>
+      <div class="stat-note">
+        diagnostic-only until measured against captured BRTI — never a passing quality status while unmeasured
+      </div>
+    </div>
+  </div>
+</section>
+
 {% endblock %}

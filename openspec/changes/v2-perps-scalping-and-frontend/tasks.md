@@ -883,9 +883,10 @@ templates/, static/) + `scripts/start_dashboard.py` + `start_dashboard.bat`.
       `ControlPanel.kill()`. Not yet wired to `EmergencyControl` because that class
       doesn't exist until §5 (risk layer) is built; the control-state plumbing is ready
       for it.
-- [ ] 9.5 Live updates via WebSocket or HTMX polling — not done; current views are
-      request-on-load. Revisit once §4-§7 produce data that actually changes in
-      real time.
+- [x] 9.5 Live updates via WebSocket or HTMX polling — implemented with a local
+      read-only polling fragment (`/fragments/overview-status`) and no CDN/build
+      dependency; the overview refreshes every 10 seconds and preserves stale
+      status when the fragment is unavailable.
 - [x] 9.6 Auth: binds to `127.0.0.1` by default in `start_dashboard.py`; passing
       `--host` other than loopback refuses to start unless `DASHBOARD_AUTH_SECRET` is
       set (the setting already existed in `config/settings.py`). No request-level auth

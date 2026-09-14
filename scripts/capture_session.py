@@ -55,6 +55,7 @@ from kalshi_bot.data.brti import (  # noqa: E402
 )
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
 from kalshi_bot.data.kalshi.parse import parse_candle, parse_market  # noqa: E402
+from kalshi_bot.data.l2 import KalshiL2Source, poll_l2  # noqa: E402
 from kalshi_bot.data.perps import (  # noqa: E402
     KalshiPerpMarkSource,
     backfill_funding,
@@ -62,6 +63,7 @@ from kalshi_bot.data.perps import (  # noqa: E402
     poll_perp_marks,
     resolve_crypto_perp_tickers,
 )
+from kalshi_bot.data.public_trades import KalshiTradeSource, poll_public_trades  # noqa: E402
 from kalshi_bot.storage import (  # noqa: E402
     BRTIObservation,
     Candle,
@@ -158,28 +160,35 @@ def gap_report(session, kind: str, *, period_seconds: int | None = None) -> dict
     }
 
 
-def capture_kxbtc15m(session, *, start_ts: int, end_ts: int, period_minutes: int,
-                     max_markets: int, session_id: str) -> tuple[int, int]:
+def capture_event_series(session, *, series_ticker: str, start_ts: int, end_ts: int,
+                         period_minutes: int, max_markets: int, session_id: str) -> tuple[int, int]:
     markets = candles = 0
     now = int(time.time())
     with KalshiPublicClient(max_reads_per_second=8) as client:
-        for raw in client.iter_markets(series_ticker="KXBTC15M", status="settled",
+        for raw in client.iter_markets(series_ticker=series_ticker, status="settled",
                                        min_close_ts=start_ts, max_close_ts=end_ts):
             if max_markets and markets >= max_markets:
                 break
-            endpoint = "/markets?series_ticker=KXBTC15M&status=settled"
-            parsed = parse_market(raw, series_ticker="KXBTC15M", capture_session_id=session_id,
+            endpoint = f"/markets?series_ticker={series_ticker}&status=settled"
+            parsed = parse_market(raw, series_ticker=series_ticker, capture_session_id=session_id,
                                   source_endpoint=endpoint, fetched_at=now)
             session.merge(KalshiMarket(**parsed))
+            # The selected markets close inside [start_ts, end_ts], but some
+            # have been open for much longer.  Keep the candle request inside
+            # the caller's requested refresh window; using the full contract
+            # lifetime here turns a three-day live refresh into a potentially
+            # months-long backfill and quickly exhausts the public API quota.
+            candle_start = max(start_ts, parsed["open_ts"])
+            candle_end = min(end_ts, parsed["close_ts"])
             raw_candles = client.get_candlesticks(
-                "KXBTC15M", raw["ticker"], start_ts=parsed["open_ts"],
-                end_ts=parsed["close_ts"], period_minutes=period_minutes
+                series_ticker, raw["ticker"], start_ts=candle_start,
+                end_ts=candle_end, period_minutes=period_minutes
             )
             for item in raw_candles:
                 session.add(Candle(**parse_candle(
-                    item, market_ticker=raw["ticker"], series_ticker="KXBTC15M",
+                    item, market_ticker=raw["ticker"], series_ticker=series_ticker,
                     period_minutes=period_minutes, capture_session_id=session_id,
-                    source_endpoint=f"/series/KXBTC15M/markets/{raw['ticker']}/candlesticks",
+                    source_endpoint=f"/series/{series_ticker}/markets/{raw['ticker']}/candlesticks",
                     fetched_at=now)))
             markets += 1
             candles += len(raw_candles)
@@ -329,6 +338,12 @@ def main() -> None:
     parser.add_argument("--end-ts", type=int)
     parser.add_argument("--period", type=int, default=1)
     parser.add_argument("--max-markets", type=int, default=0)
+    parser.add_argument(
+        "--series", default="KXBTC15M",
+        help="event series ticker for --capture, e.g. KXBTC15M or KXBTC (BTC hourly "
+        "strike ladder, per crypto_registry's series_ticker for the 60m instrument). "
+        "Default: KXBTC15M.",
+    )
     parser.add_argument("--report", action="store_true")
     parser.add_argument(
         "--poll-brti", action="store_true",
@@ -375,6 +390,31 @@ def main() -> None:
         "(BTC, ETH...), full ticker (KXBTCPERP), 'all', or a comma-list. "
         "Repeatable. Default: the nine registry crypto assets.",
     )
+    parser.add_argument(
+        "--poll-l2", action="store_true",
+        help="run a foreground loop over /markets/{ticker}/orderbook, rediscovering "
+        "--l2-series's currently open markets and recording an L2 snapshot per market "
+        "(Ctrl+C or --duration stops it). Read-only, unauthenticated.",
+    )
+    parser.add_argument(
+        "--l2-series", default="KXBTC15M",
+        help="event series ticker for --poll-l2, e.g. KXBTC15M. Default: KXBTC15M.",
+    )
+    parser.add_argument(
+        "--poll-trades", action="store_true",
+        help="run a foreground loop over /markets/trades, rediscovering --trades-series's "
+        "currently open markets and recording new public trades per market (Ctrl+C or "
+        "--duration stops it). Read-only, unauthenticated.",
+    )
+    parser.add_argument(
+        "--trades-series", default="KXBTC15M",
+        help="event series ticker for --poll-trades, e.g. KXBTC15M. Default: KXBTC15M.",
+    )
+    parser.add_argument(
+        "--rediscover-every", type=float, default=300.0,
+        help="how often --poll-l2 / --poll-trades re-list a series' open markets, seconds "
+        "(shared by both; KXBTC15M's 15-minute windows need this refreshed periodically)",
+    )
     args = parser.parse_args()
     if args.import_jsonl and not args.kind:
         parser.error("--kind is required with --import-jsonl")
@@ -387,8 +427,8 @@ def main() -> None:
         if args.import_jsonl:
             print(f"imported={import_jsonl(session, args.import_jsonl, args.kind, session_id)}")
         if args.capture:
-            print("capture=", capture_kxbtc15m(
-                session, start_ts=args.start_ts, end_ts=args.end_ts,
+            print("capture=", capture_event_series(
+                session, series_ticker=args.series, start_ts=args.start_ts, end_ts=args.end_ts,
                 period_minutes=args.period, max_markets=args.max_markets, session_id=session_id
             ))
         if args.poll_brti:
@@ -413,45 +453,64 @@ def main() -> None:
             assets = _parse_perp_assets(args.perp_asset)
             with _kalshi_margin_client() as client:
                 tickers = resolve_crypto_perp_tickers(client, wanted=assets)
-                if not tickers:
-                    print(f"no active crypto perps match {assets}")
-                else:
-                    print(f"backfilling funding for {len(tickers)} perp(s): {', '.join(tickers)}")
-                    fres = backfill_funding(
-                        session, client, tickers=tickers,
-                        start_ts=start_ts, end_ts=end_ts, session_id=session_id,
-                    )
-                    print("backfill_funding=", json.dumps(fres.as_dict(), sort_keys=True))
+                print(f"backfilling funding for {len(tickers)} perp(s): {', '.join(tickers)}")
+                fres = backfill_funding(
+                    session, client, tickers=tickers,
+                    start_ts=start_ts, end_ts=end_ts, session_id=session_id,
+                )
+                print("backfill_funding=", json.dumps(fres.as_dict(), sort_keys=True))
         if args.poll_perp_marks:
             assets = _parse_perp_assets(args.perp_asset)
             with _kalshi_margin_client() as client:
                 tickers = resolve_crypto_perp_tickers(client, wanted=assets)
-                if not tickers:
-                    print(f"no active crypto perps match {assets}")
-                else:
-                    print(f"polling {len(tickers)} perp mark feed(s): {', '.join(tickers)}")
-                    source = KalshiPerpMarkSource(client, tickers=tickers)
-                    mres = poll_perp_marks(
-                        session, source,
-                        interval_s=args.interval, duration_s=args.duration,
-                        session_id=session_id,
-                    )
-                    print("poll_perp_marks=", json.dumps(mres.as_dict(), sort_keys=True))
+                print(f"polling {len(tickers)} perp mark feed(s): {', '.join(tickers)}")
+                source = KalshiPerpMarkSource(client, tickers=tickers)
+                mres = poll_perp_marks(
+                    session, source,
+                    interval_s=args.interval, duration_s=args.duration,
+                    session_id=session_id,
+                )
+                print("poll_perp_marks=", json.dumps(mres.as_dict(), sort_keys=True))
+        if args.poll_l2:
+            with KalshiPublicClient() as client:
+                source = KalshiL2Source(
+                    client,
+                    series_ticker=args.l2_series,
+                    rediscover_every_s=args.rediscover_every,
+                )
+                print(f"polling L2 order books for {args.l2_series}'s open markets")
+                lres = poll_l2(
+                    session, source,
+                    interval_s=args.interval, duration_s=args.duration,
+                    session_id=session_id,
+                )
+                print("poll_l2=", json.dumps(lres.as_dict(), sort_keys=True))
+        if args.poll_trades:
+            with KalshiPublicClient() as client:
+                source = KalshiTradeSource(
+                    client,
+                    series_ticker=args.trades_series,
+                    rediscover_every_s=args.rediscover_every,
+                )
+                print(f"polling public trades for {args.trades_series}'s open markets")
+                tres = poll_public_trades(
+                    session, source,
+                    interval_s=args.interval, duration_s=args.duration,
+                    session_id=session_id,
+                )
+                print("poll_public_trades=", json.dumps(tres.as_dict(), sort_keys=True))
         if args.capture_funding_estimates:
             assets = _parse_perp_assets(args.perp_asset)
             with _kalshi_margin_client() as client:
                 tickers = resolve_crypto_perp_tickers(client, wanted=assets)
-                if not tickers:
-                    print(f"no active crypto perps match {assets}")
-                else:
-                    print(
-                        f"capturing funding estimates for {len(tickers)} perp(s): "
-                        f"{', '.join(tickers)}"
-                    )
-                    eres = capture_funding_estimates(
-                        session, client, tickers=tickers, session_id=session_id
-                    )
-                    print("capture_funding_estimates=", json.dumps(eres.as_dict(), sort_keys=True))
+                print(
+                    f"capturing funding estimates for {len(tickers)} perp(s): "
+                    f"{', '.join(tickers)}"
+                )
+                eres = capture_funding_estimates(
+                    session, client, tickers=tickers, session_id=session_id
+                )
+                print("capture_funding_estimates=", json.dumps(eres.as_dict(), sort_keys=True))
         if args.report:
             for kind in KINDS:
                 print(json.dumps(gap_report(session, kind), sort_keys=True))

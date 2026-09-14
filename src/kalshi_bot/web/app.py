@@ -26,7 +26,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
+from sqlalchemy import select
 
+from kalshi_bot.agents.inspection import council_run_details
 from kalshi_bot.backtest.promotion_gate import PromotionPolicy
 from kalshi_bot.backtest.validation_run import (
     DEFAULT_EMBARGO_SECONDS,
@@ -34,10 +36,12 @@ from kalshi_bot.backtest.validation_run import (
     DEFAULT_TRAIN_SECONDS,
 )
 from kalshi_bot.config.settings import get_settings
-from kalshi_bot.storage import create_all_tables, get_engine, get_session_factory
+from kalshi_bot.risk.fixed_risk import FixedRiskConfig
+from kalshi_bot.storage import CouncilRunRecord, create_all_tables, get_engine, get_session_factory
 from kalshi_bot.web import queries
 from kalshi_bot.web.control_state import get_control_panel
 from kalshi_bot.web.operations import COMMANDS, CaptureProcess, OperationManager, PaperProcess
+from kalshi_bot.web.theme import PRESETS, ThemeColors, load_theme, save_theme, theme_css
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
@@ -121,6 +125,7 @@ def create_app() -> FastAPI:
     paper_process = PaperProcess(Path.cwd())
     capture_process = CaptureProcess(Path.cwd())
     policy = PromotionPolicy()
+    risk_config = FixedRiskConfig()
 
     fold_geometry = (
         f"{DEFAULT_TRAIN_SECONDS // 86_400}d train / "
@@ -138,9 +143,12 @@ def create_app() -> FastAPI:
         )
 
     def _base_context() -> dict:
+        with session_factory() as theme_session:
+            colors = load_theme(theme_session)
         return {
             "paper_trading": settings.paper_trading,
             "now_utc": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            "theme_css": theme_css(colors),
         }
 
     def _coverage_refresh_loop() -> None:
@@ -162,6 +170,7 @@ def create_app() -> FastAPI:
             equity = (
                 queries.equity_curve(session, run.id, settings.bankroll_total_usd) if run else []
             )
+            latest_trade_signal = next((s for s in signals if s.action != "HOLD"), None)
             context = {
                 **_base_context(),
                 "active_page": "overview",
@@ -174,8 +183,28 @@ def create_app() -> FastAPI:
                 "readiness": _readiness(session),
                 "fold_geometry": fold_geometry,
                 "paper_runs": queries.paper_runs_overview(session),
+                "risk_config": risk_config,
+                "latest_trade_signal": latest_trade_signal,
+                "bankroll_total_usd": settings.bankroll_total_usd,
             }
         return templates.TemplateResponse(request, "index.html", context)
+
+    @app.get("/fragments/overview-status", response_class=HTMLResponse)
+    def overview_status(request: Request) -> HTMLResponse:
+        """Return the small live operator fragment used by the overview.
+
+        The fragment is deliberately read-only.  The kill switch remains a
+        normal POST form and never depends on the refresh client.
+        """
+        with session_factory() as session:
+            context = {
+                **_base_context(),
+                "control": panel.snapshot(),
+                "readiness": _readiness(session),
+                "feeds": queries.capture_feeds(session),
+                "paper_runs": queries.paper_runs_overview(session),
+            }
+        return templates.TemplateResponse(request, "_overview_status.html", context)
 
     @app.get("/data", response_class=HTMLResponse)
     def data(request: Request) -> HTMLResponse:
@@ -187,6 +216,7 @@ def create_app() -> FastAPI:
                 "sampling": queries.sampling_quality(session),
                 "coverage": queries.cached_btc_coverage(),
                 "capture_process": capture_process.snapshot(),
+                "brti_reconstruction": queries.brti_reconstruction_coverage(session),
             }
         return templates.TemplateResponse(request, "data.html", context)
 
@@ -198,6 +228,7 @@ def create_app() -> FastAPI:
                 "active_page": "markets",
                 "areas": queries.market_areas(session),
                 "admissions": queries.asset_admissions(session),
+                "readiness_matrix": queries.papertrading_readiness(session),
             }
         return templates.TemplateResponse(request, "markets.html", context)
 
@@ -216,6 +247,15 @@ def create_app() -> FastAPI:
                 a for a in queries.asset_admissions(session) if a.domain == domain
             ]
             paper_runs = queries.domain_paper_runs(session, domain)
+            readiness_matrix = [
+                item for item in queries.papertrading_readiness(session) if item.domain == domain
+            ]
+            # Perpetuals section (strategy-lab-multi-account §7.1): open +
+            # recently-closed perp positions with bracket, funding, and
+            # distance to liquidation.
+            perp_positions = (
+                queries.perp_positions_view(session) if domain == "perp" else []
+            )
         return templates.TemplateResponse(
             request,
             "market_area.html",
@@ -225,6 +265,8 @@ def create_app() -> FastAPI:
                 "area": area,
                 "admissions": admissions,
                 "paper_runs": paper_runs,
+                "perp_positions": perp_positions,
+                "readiness_matrix": readiness_matrix,
             },
         )
 
@@ -239,6 +281,37 @@ def create_app() -> FastAPI:
     @app.get("/prediction-markets", response_class=HTMLResponse)
     def prediction_markets(request: Request) -> HTMLResponse:
         return _area_response(request, "prediction-markets")
+
+    @app.get("/strategy-lab", response_class=HTMLResponse)
+    def strategy_lab(request: Request) -> HTMLResponse:
+        """Side-by-side comparison of recent paper runs, keyed by
+        `paper_run_id` (strategy-lab-multi-account §7.2/§7.3): strategy,
+        gate status, PnL, and flat-sizing PnL together."""
+        with session_factory() as session:
+            context = {
+                **_base_context(),
+                "active_page": "strategy-lab",
+                "comparison": queries.strategy_lab_comparison(session),
+            }
+        return templates.TemplateResponse(request, "strategy_lab.html", context)
+
+    @app.get("/council", response_class=HTMLResponse)
+    def council(request: Request, run_id: str | None = None) -> HTMLResponse:
+        with session_factory() as session:
+            selected = run_id
+            if selected is None:
+                latest = session.execute(
+                    select(CouncilRunRecord)
+                    .order_by(CouncilRunRecord.created_at.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                selected = latest.id if latest else None
+            details = council_run_details(session, selected) if selected else None
+        return templates.TemplateResponse(
+            request,
+            "council.html",
+            {**_base_context(), "active_page": "council", "details": details},
+        )
 
     @app.get("/runs", response_class=HTMLResponse)
     def runs(request: Request) -> HTMLResponse:
@@ -310,5 +383,51 @@ def create_app() -> FastAPI:
     def kill() -> RedirectResponse:
         panel.kill()
         return RedirectResponse("/", status_code=303)
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page(request: Request) -> HTMLResponse:
+        with session_factory() as session:
+            colors = load_theme(session)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                **_base_context(),
+                "active_page": "settings",
+                "colors": colors,
+                "presets": PRESETS,
+                "risk_config": risk_config,
+                "perp_max_position_pct": settings.perp_max_position_pct,
+                "fold_geometry": fold_geometry,
+                "policy": policy,
+            },
+        )
+
+    @app.post("/settings/theme/apply")
+    async def apply_theme(request: Request) -> RedirectResponse:
+        form = await request.form()
+        current = ThemeColors()
+        overrides = {
+            name: str(form.get(name, default))
+            for name, default in current.as_dict().items()
+        }
+        with session_factory() as session:
+            save_theme(session, ThemeColors(**overrides))
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/theme/preset/{name}")
+    def apply_theme_preset(name: str) -> RedirectResponse:
+        preset = PRESETS.get(name)
+        if preset is None:
+            raise HTTPException(status_code=404, detail="unknown preset")
+        with session_factory() as session:
+            save_theme(session, preset)
+        return RedirectResponse("/settings", status_code=303)
+
+    @app.post("/settings/theme/reset")
+    def reset_theme() -> RedirectResponse:
+        with session_factory() as session:
+            save_theme(session, ThemeColors())
+        return RedirectResponse("/settings", status_code=303)
 
     return app

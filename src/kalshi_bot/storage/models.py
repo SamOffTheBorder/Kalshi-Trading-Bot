@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -474,6 +475,36 @@ class DatasetManifest(Base):
     artifact_hashes: Mapped[list | None] = mapped_column(JSON)
     normalized_partitions: Mapped[list | None] = mapped_column(JSON)
     source_mappings: Mapped[dict | None] = mapped_column(JSON)
+    provenance_class: Mapped[str | None] = mapped_column(String(16))
+    reconstruction_error: Mapped[dict | None] = mapped_column(JSON)
+
+
+class ReconstructedIndexObservation(Base):
+    """One second of the synthetic BRTI proxy composed from constituent USD
+    venues (brti-constituent-history §D3). Distinct from `brti_observations`
+    by construction -- nothing here is ever readable through the captured-
+    BRTI read path, and every row is explicit about how many venues, and
+    which ones, contributed to it."""
+
+    __tablename__ = "reconstructed_index_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "target_index", "observed_at", name="uq_reconstructed_index_observed_at"
+        ),
+        Index("ix_reconstructed_index_observed_at", "target_index", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_index: Mapped[str] = mapped_column(String(16), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    value_dollars: Mapped[str] = mapped_column(String(32), nullable=False)
+    contributor_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    contributing_venues: Mapped[list] = mapped_column(JSON, nullable=False)
+    provenance: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="reconstructed_index"
+    )
+    composed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    composer_version: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class PaperRun(Base):
@@ -493,6 +524,17 @@ class PaperRun(Base):
     manifest_sha256: Mapped[str | None] = mapped_column(String(64))
     risk_policy_version: Mapped[str | None] = mapped_column(String(64))
 
+    # Which strategy selected this run's behaviour, resolved through
+    # `strategy/registry.py` (strategy-lab-multi-account §1.4). `strategy_id`
+    # is the registered id, not a free-text label; `strategy_gate_status` is
+    # the registry's standing for that strategy at run time and is never
+    # altered by the run's own result (design.md D4). Nullable: runs written
+    # before schema v14 have none.
+    strategy_id: Mapped[str | None] = mapped_column(String(64))
+    strategy_config_version: Mapped[str | None] = mapped_column(String(64))
+    strategy_gate_status: Mapped[str | None] = mapped_column(String(16))
+    council_profile_id: Mapped[str | None] = mapped_column(String(96))
+
 
 class PaperAuditEvent(Base):
     """Append-only audit trail for every cross-domain paper lifecycle event."""
@@ -510,7 +552,157 @@ class PaperAuditEvent(Base):
     reason: Mapped[str | None] = mapped_column(String(256))
     data_manifest_hash: Mapped[str | None] = mapped_column(String(64))
     risk_policy_version: Mapped[str | None] = mapped_column(String(64))
+    council_run_id: Mapped[str | None] = mapped_column(String(64))
+    council_decision_id: Mapped[str | None] = mapped_column(String(64))
     payload: Mapped[dict | None] = mapped_column(JSON)
+
+
+class CouncilRunRecord(Base):
+    """One immutable candidate review and its evidence/policy lineage."""
+
+    __tablename__ = "council_runs"
+    __table_args__ = (
+        Index("ix_council_runs_paper_time", "paper_run_id", "created_at"),
+        Index("ix_council_runs_profile_time", "profile_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    paper_run_id: Mapped[str | None] = mapped_column(ForeignKey("paper_runs.id"))
+    candidate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    domain: Mapped[str] = mapped_column(String(16), nullable=False)
+    specialization_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    instrument_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    profile_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decision_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class EvidenceBundleRecord(Base):
+    """Content-addressed, point-in-time evidence used by a council run."""
+
+    __tablename__ = "council_evidence_bundles"
+    __table_args__ = (UniqueConstraint("bundle_hash", name="uq_council_evidence_bundle_hash"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    council_run_id: Mapped[str] = mapped_column(ForeignKey("council_runs.id"), nullable=False)
+    candidate_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    decision_ts: Mapped[int] = mapped_column(Integer, nullable=False)
+    bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    bundle_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class AgentDefinitionSnapshotRecord(Base):
+    """Versioned role/provider/card permissions captured for one council run."""
+
+    __tablename__ = "council_agent_definitions"
+    __table_args__ = (
+        Index("ix_council_agent_defs_run_role", "council_run_id", "role"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    council_run_id: Mapped[str] = mapped_column(ForeignKey("council_runs.id"), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    capability_hash: Mapped[str | None] = mapped_column(String(64))
+    permissions: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class AgentVerdictRecord(Base):
+    """Append-only validated verdict attempt from one council role."""
+
+    __tablename__ = "council_agent_verdicts"
+    __table_args__ = (
+        UniqueConstraint(
+            "council_run_id",
+            "role",
+            "attempt",
+            "request_hash",
+            name="uq_council_verdict_attempt",
+        ),
+        Index("ix_council_verdicts_run_role", "council_run_id", "role"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    council_run_id: Mapped[str] = mapped_column(ForeignKey("council_runs.id"), nullable=False)
+    evidence_bundle_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    verdict_json: Mapped[dict | None] = mapped_column(JSON)
+    raw_output_hash: Mapped[str | None] = mapped_column(String(64))
+    raw_output_redacted: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    a2a_task_id: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class CouncilDecisionRecord(Base):
+    """Sealed master recommendation and deterministic policy result."""
+
+    __tablename__ = "council_decisions"
+    __table_args__ = (Index("ix_council_decisions_run_time", "council_run_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    council_run_id: Mapped[str] = mapped_column(ForeignKey("council_runs.id"), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    final_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(256))
+    policy_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    artifact_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class CouncilProfileLifecycleRecord(Base):
+    """Append-only lifecycle history for one versioned council profile."""
+
+    __tablename__ = "council_profile_lifecycle"
+    __table_args__ = (Index("ix_council_profile_lifecycle", "profile_id", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    profile_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    from_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    to_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    operator: Mapped[str | None] = mapped_column(String(64))
+    report_id: Mapped[str | None] = mapped_column(String(96))
+    reason: Mapped[str] = mapped_column(String(256), nullable=False)
+    gate_results: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+def _reject_council_mutation(*_args, **_kwargs) -> None:
+    """Council lineage is append-only; corrections are new attempts/rows."""
+
+    raise ValueError("council lineage records are append-only")
+
+
+for _append_only_model in (
+    CouncilRunRecord,
+    EvidenceBundleRecord,
+    AgentDefinitionSnapshotRecord,
+    AgentVerdictRecord,
+    CouncilDecisionRecord,
+    CouncilProfileLifecycleRecord,
+):
+    event.listen(_append_only_model, "before_update", _reject_council_mutation)
+    event.listen(_append_only_model, "before_delete", _reject_council_mutation)
 
 
 class PerpPaperPosition(Base):
@@ -1071,3 +1263,22 @@ class LifecycleTransitionRecord(Base):
     model_fingerprint: Mapped[str | None] = mapped_column(String(64))
     risk_policy_version: Mapped[str | None] = mapped_column(String(64))
     gate_results: Mapped[dict | None] = mapped_column(JSON)
+
+
+class DashboardSetting(Base):
+    """Single operator-facing dashboard preference, stored server-side.
+
+    Key-value rather than one column per setting: the dashboard is one
+    operator's tool, not multi-tenant, so a small open-ended JSON value per
+    key avoids a migration for every new preference (theme colors today,
+    anything else later). Read once at process start and cached in-process;
+    a write updates both.
+    """
+
+    __tablename__ = "dashboard_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+    )

@@ -1,10 +1,10 @@
-from kalshi_bot.config.settings import Settings, get_settings
 from kalshi_bot.config.lifecycle import (
     AssetDomainCandidate,
     Domain,
     LifecycleState,
     validate_lifecycle,
 )
+from kalshi_bot.config.settings import Settings, get_settings
 
 __all__ = [
     "AssetDomainCandidate",

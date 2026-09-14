@@ -7,7 +7,9 @@ from sqlalchemy.orm import sessionmaker
 from kalshi_bot.data.manifests import (
     ManifestError,
     ManifestSpec,
+    classify_provenance,
     manifest_hash,
+    manifest_provenance_class,
     persist_manifest,
     validate_manifest,
 )
@@ -80,3 +82,66 @@ def test_manifest_pins_partitions_and_blocks_revisions_or_misalignment():
             )
         with pytest.raises(ManifestError, match="aligned"):
             validate_manifest(row, available_source_ids=set(row.source_ids), source_aligned=False)
+
+
+def test_classify_provenance_is_fail_closed():
+    # All partitions source-native -> source_native.
+    assert classify_provenance({"a": "source_native", "b": "source_native"}) == "source_native"
+    # A mixed manifest classifies reconstructed.
+    assert classify_provenance({"a": "source_native", "b": "reconstructed"}) == "reconstructed"
+    # An unrecognized provenance value classifies reconstructed, not
+    # source_native.
+    assert classify_provenance({"a": "source_native", "b": "made_up"}) == "reconstructed"
+    # No partitions declared at all classifies reconstructed.
+    assert classify_provenance({}) == "reconstructed"
+
+
+def test_persisted_manifest_provenance_class_defaults_to_reconstructed():
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    with sessionmaker(bind=engine)() as session:
+        # A manifest constructed without partition_provenance must not be
+        # admissible: it classifies reconstructed, not source_native.
+        row = persist_manifest(session, _spec(), created_at=300)
+        assert row.provenance_class == "reconstructed"
+        assert manifest_provenance_class(row) == "reconstructed"
+
+
+def test_persisted_manifest_provenance_class_source_native_requires_all_partitions():
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    mixed_spec = ManifestSpec(
+        **{
+            **_spec().__dict__,
+            "partition_provenance": {
+                "BTC:kraken:1s": "source_native",
+                "BTC:reconstructed_index:1s": "reconstructed",
+            },
+        }
+    )
+    all_native_spec = ManifestSpec(
+        **{
+            **_spec().__dict__,
+            "partition_provenance": {
+                "BTC:kraken:1s": "source_native",
+                "ETH:kraken:1s": "source_native",
+            },
+        }
+    )
+    with sessionmaker(bind=engine)() as session:
+        mixed_row = persist_manifest(session, mixed_spec, created_at=300)
+        assert manifest_provenance_class(mixed_row) == "reconstructed"
+
+        native_row = persist_manifest(session, all_native_spec, created_at=301)
+        assert manifest_provenance_class(native_row) == "source_native"
+
+
+def test_manifest_provenance_class_treats_unset_field_as_reconstructed():
+    """Direct test of the default-on-omission read path (tasks.md 1.5): a
+    manifest row lacking `provenance_class` must not be admissible."""
+    engine = create_engine("sqlite://")
+    create_all_tables(engine)
+    with sessionmaker(bind=engine)() as session:
+        row = persist_manifest(session, _spec(), created_at=300)
+        row.provenance_class = None
+        assert manifest_provenance_class(row) == "reconstructed"

@@ -6,8 +6,18 @@ REM  Double-click to open a visible capture window. Close it anytime to stop --
 REM  every phase is resumable and nothing is lost.
 REM
 REM  Each cycle:
-REM    1. refresh the last ~3 days of KXBTC15M markets + 1-min contract candles
-REM       (Kalshi public API, unauthenticated)
+REM    1. refresh the last ~3 days of markets + 1-min contract candles for
+REM       BTC/ETH/SOL/XRP's 15-minute and hourly event series (Kalshi public
+REM       API, unauthenticated). Kalshi runs TWO distinct hourly series per
+REM       asset that both close on the hour: a THRESHOLD ladder (KX{A}D,
+REM       "above $X") and a RANGE ladder (KX{A}, "between $X and $Y",
+REM       strike_type=between) -- zero ticker overlap between them. Both are
+REM       captured for BTC/ETH/XRP; SOL has no range series on the exchange
+REM       (KXSOL/KXSOLRANGE return 0 markets) so it only has KXSOL15M+KXSOLD:
+REM         KXBTC15M, KXBTC (range),  KXBTCD (threshold)
+REM         KXETH15M, KXETH (range),  KXETHD (threshold)
+REM         KXSOL15M,                 KXSOLD (threshold; no range exists)
+REM         KXXRP15M, KXXRP (range),  KXXRPD (threshold)
 REM    2. backfill Kalshi crypto-perp funding history for the nine registry
 REM       assets (KXBTCPERP/KXETHPERP/... -- /margin/funding_rates/historical,
 REM       read-only authenticated). Funding IS backfillable, so this is a cheap
@@ -52,7 +62,47 @@ set /a START=%NOW% - 259200
 :loop
 echo.
 echo === %DATE% %TIME%  refreshing KXBTC15M contract data (last 3 days) ===
-uv run python scripts\capture_session.py --capture --start-ts %START% --end-ts %NOW%
+uv run python scripts\capture_session.py --capture --series KXBTC15M --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXBTC hourly RANGE contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXBTC --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXBTCD hourly THRESHOLD contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXBTCD --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXETH15M contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXETH15M --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXETH hourly RANGE contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXETH --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXETHD hourly THRESHOLD contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXETHD --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXSOL15M contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXSOL15M --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXSOLD hourly THRESHOLD contract data (last 3 days; no range series exists for SOL) ===
+uv run python scripts\capture_session.py --capture --series KXSOLD --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXXRP15M contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXXRP15M --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXXRP hourly RANGE contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXXRP --start-ts %START% --end-ts %NOW%
+
+echo.
+echo === %DATE% %TIME%  refreshing KXXRPD hourly THRESHOLD contract data (last 3 days) ===
+uv run python scripts\capture_session.py --capture --series KXXRPD --start-ts %START% --end-ts %NOW%
 
 echo.
 echo === %DATE% %TIME%  backfilling crypto-perp funding history (idempotent) ===

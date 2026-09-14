@@ -17,7 +17,13 @@ from sqlalchemy.orm import Session
 
 from kalshi_bot.config.settings import Settings
 from kalshi_bot.execution.operator_cli import OperatorCommandError, OperatorConsole
-from kalshi_bot.storage import Base, EmergencyHaltRecord, PaperAuditEvent, PaperRun
+from kalshi_bot.storage import (
+    Base,
+    CouncilRunRecord,
+    EmergencyHaltRecord,
+    PaperAuditEvent,
+    PaperRun,
+)
 
 
 @pytest.fixture
@@ -186,3 +192,30 @@ def test_resume_requires_an_operator_argument(session):
     console.run("halt")
     with pytest.raises(OperatorCommandError):
         console.run("resume")
+
+
+def test_council_inspection_commands_are_read_only_and_redacted(session, capsys):
+    session.add(
+        CouncilRunRecord(
+            id="council-1",
+            candidate_id="candidate-1",
+            domain="prediction",
+            specialization_key="prediction/BTC/15m",
+            instrument_id="MKT-1",
+            profile_id="prediction-btc-15m",
+            profile_version="1",
+            policy_version="policy-1",
+            candidate_hash="candidate-hash",
+            evidence_bundle_hash="evidence-hash",
+            decision_ts=100,
+            state="completed",
+            candidate_json={"safe": True},
+            created_at=100,
+        )
+    )
+    session.flush()
+    console = _console(session)
+    assert console.run("council", ["council-1"]) == 0
+    assert '"council-1"' in capsys.readouterr().out
+    assert console.run("council-profile") == 0
+    assert '"profiles"' in capsys.readouterr().out

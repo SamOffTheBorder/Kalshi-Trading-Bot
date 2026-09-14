@@ -98,8 +98,25 @@ class Settings(BaseSettings):
         default=0.05,
         gt=0.0,
         le=0.10,
-        description="Hard cap on any single position as a fraction of that broker's bankroll, "
-        "applied AFTER Kelly sizing as a min() clamp. Kelly output can never exceed this.",
+        description="Hard cap on any single EVENT-CONTRACT position as a fraction of that "
+        "broker's bankroll, applied AFTER Kelly/fixed-risk sizing as a min() clamp. Sizing "
+        "output can never exceed this. Perps use `perp_max_position_pct` instead — see its "
+        "description for why they need a separate, looser cap.",
+    )
+    perp_max_position_pct: float = Field(
+        default=0.20,
+        gt=0.0,
+        le=0.30,
+        description="Hard cap on any single PERP position as a fraction of that broker's "
+        "bankroll — deliberately separate from and looser than `max_position_pct`. Kalshi "
+        "perp lot sizes are fixed per asset (e.g. one SOL perp contract is a nontrivial "
+        "notional at a small bankroll) and independent of this bot's own risk sizing, so a "
+        "5% cap sized for event contracts can make some perp assets un-orderable at 1 "
+        "contract, or force every fill to be exactly 1 contract with no room to size up or "
+        "down. Still a real backstop, not a removed one — `max_leverage` (risk/leverage_"
+        "governor.py) and `risk_pct` remain independent brakes underneath it either way. "
+        "Revisit downward once bankroll is large enough that `max_position_pct` alone "
+        "already affords a properly-sized perp lot.",
     )
 
     # --- Strategy gates ---------------------------------------------------------

@@ -23,6 +23,7 @@ places nothing and touches no ``/orders`` path.
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -309,14 +310,43 @@ def backfill_funding(
     return result
 
 
+class NoCryptoPerpsMatchedError(RuntimeError):
+    """Raised when ``resolve_crypto_perp_tickers`` finds zero matches.
+
+    A silent empty list here previously made every downstream capture
+    (funding backfill, mark polling, funding-estimate snapshots) look like a
+    clean no-op run instead of a broken resolution -- Kalshi's demo
+    environment renumbered every crypto perp ticker (``KXBTCPERP`` ->
+    ``KXBTCPERP1``, etc.) and capture kept "succeeding" with zero new rows
+    for days before anyone noticed. Failing loudly here is deliberate: a
+    ticker-shape change on the exchange side must stop the capture script,
+    not degrade it into a silent no-op.
+    """
+
+
+# Kalshi's ticker suffix after the asset symbol and before an optional
+# version digit, e.g. "KXBTCPERP" or "KXBTCPERP1". A bare digit suffix is
+# treated as instrument versioning by the exchange, not a different asset --
+# but it CAN mean a different contract size/notional (observed: demo's
+# ``KXBTCPERP1`` replaced ``KXBTCPERP`` with a 0.0001 BTC/contract reissue).
+# Capture records whichever ticker shape is actually live; it does not
+# assume version N and N+1 are numerically comparable.
+_PERP_TICKER_RE = re.compile(r"^KX(?P<symbol>[A-Z]+)PERP(?P<version>\d*)$")
+
+
 def resolve_crypto_perp_tickers(
     client: _FundingClient, *, wanted: Iterable[str] | None = None
 ) -> list[str]:
     """List active crypto-perp market tickers from ``/margin/markets``.
 
     ``wanted`` optionally filters to a set of asset symbols (e.g. ``{"BTC",
-    "ETH"}`` -> ``["KXBTCPERP", "KXETHPERP"]``). With no filter, every active
-    ``asset_class == "Crypto"`` perp is returned.
+    "ETH"}`` -> ``["KXBTCPERP", "KXETHPERP"]``, or whatever versioned ticker
+    the exchange currently lists for that symbol, e.g. ``KXBTCPERP1``).  With
+    no filter, every active ``asset_class == "Crypto"`` perp is returned.
+
+    Raises :class:`NoCryptoPerpsMatchedError` if ``wanted`` is given and
+    nothing active matches any requested symbol -- see that class's
+    docstring for why this must not degrade into an empty list.
     """
     body = client.get_markets(status="active")
     markets = body.get("markets", []) if isinstance(body, dict) else []
@@ -326,15 +356,21 @@ def resolve_crypto_perp_tickers(
         if not isinstance(m, dict):
             continue
         ticker = str(m.get("ticker", ""))
-        if not ticker.endswith("PERP"):
+        match = _PERP_TICKER_RE.match(ticker)
+        if match is None:
             continue
         if str(m.get("asset_class", "")).lower() != "crypto":
             continue
-        if wanted_upper is not None:
-            symbol = ticker.removeprefix("KX").removesuffix("PERP")
-            if symbol not in wanted_upper:
-                continue
+        if wanted_upper is not None and match.group("symbol") not in wanted_upper:
+            continue
         out.append(ticker)
+    if wanted_upper is not None and not out:
+        raise NoCryptoPerpsMatchedError(
+            f"no active crypto perps matched {sorted(wanted_upper)}; the exchange "
+            "may have renumbered or delisted these tickers -- check "
+            "GET /margin/markets?status=active for the current ticker shape "
+            "before assuming this is a transient outage"
+        )
     return out
 
 
@@ -345,6 +381,7 @@ __all__ = [
     "SOURCE_LABEL",
     "FundingBackfillResult",
     "FundingEstimateCaptureResult",
+    "NoCryptoPerpsMatchedError",
     "backfill_funding",
     "capture_funding_estimates",
     "resolve_crypto_perp_tickers",

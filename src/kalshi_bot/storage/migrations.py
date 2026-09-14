@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import Engine, inspect, text
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 16
 
 
 _BAR_COLUMNS = (
@@ -131,4 +131,35 @@ def migrate(engine: Engine) -> None:
             # empty of the colliding case, which is the situation here: this
             # replaces the constraint only when it is safe and cheap to do so.
             _widen_normalized_bar_identity(conn)
+            conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))
+        elif current < 12:
+            # Version 12 adds provenance_class and reconstruction_error to
+            # dataset_manifests (brti-constituent-history). Nullable additive
+            # columns; a manifest read back without provenance_class is
+            # treated as "reconstructed" (fail-closed) by application code,
+            # not by a DB default, so historic manifests need no rewrite.
+            conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))
+        elif current < 13:
+            # Version 13 adds reconstructed_index_observations, the synthetic
+            # BRTI composer's output store. Created by Base.metadata; kept
+            # entirely distinct from brti_observations so no read path can
+            # confuse a reconstructed value for a captured one.
+            conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))
+        elif current < 14:
+            # Version 14 adds strategy_id, strategy_config_version, and
+            # strategy_gate_status to paper_runs (strategy-lab-multi-account
+            # §1.4). Nullable additive columns added by
+            # `storage/db._add_missing_columns`; runs written before this
+            # version simply have none, and dashboard code reads a missing
+            # gate status as "unknown" rather than assuming it passed.
+            conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))
+        elif current < 15:
+            # Version 15 adds append-only agent-council lineage tables and
+            # nullable council links on paper runs/audit events. Tables are
+            # created by Base.metadata and missing nullable columns are added
+            # by storage.db._add_missing_columns.
+            conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))
+        elif current < 16:
+            # Version 16 adds append-only council-profile lifecycle history;
+            # the table is created by Base.metadata without rewriting rows.
             conn.execute(text(f"PRAGMA user_version = {SCHEMA_VERSION}"))

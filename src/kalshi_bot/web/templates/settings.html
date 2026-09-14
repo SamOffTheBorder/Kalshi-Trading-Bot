@@ -1,0 +1,111 @@
+{% extends "_base.html" %}
+{% block title %}Settings — Kalshi Bot{% endblock %}
+{% block content %}
+
+<section class="panel panel-hero">
+  <h2>Appearance</h2>
+  <p class="panel-sub">
+    Colors are saved server-side (<code>dashboard_settings</code>) and apply
+    on every device that opens this dashboard — nothing here is stored only
+    in this browser. Changing a color never touches trading behavior; it is
+    display-only.
+  </p>
+
+  <h3 style="margin-top:4px">Presets</h3>
+  <div class="preset-grid">
+    {% for name, palette in presets.items() %}
+    <form method="post" action="/settings/theme/preset/{{ name }}">
+      <button class="preset-card" type="submit" title="Apply {{ name.replace('-', ' ') }}">
+        <span class="preset-swatch">
+          <span style="background:{{ palette.bg }}"></span>
+          <span style="background:{{ palette.panel }}"></span>
+          <span style="background:{{ palette.green }}"></span>
+          <span style="background:{{ palette.blue }}"></span>
+          <span style="background:{{ palette.amber }}"></span>
+          <span style="background:{{ palette.red }}"></span>
+        </span>
+        <span class="preset-label">{{ name.replace('-', ' ')|title }}</span>
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+
+  <h3 style="margin-top:20px">Custom palette</h3>
+  <form method="post" action="/settings/theme/apply">
+    <div class="color-grid">
+      {% for field, value in colors.as_dict().items() %}
+      <div class="color-field">
+        <input type="color" id="c-{{ field }}" name="{{ field }}" value="{{ value }}"
+               oninput="document.getElementById('hex-{{ field }}').textContent=this.value">
+        <label for="c-{{ field }}">{{ field.replace('_', ' ')|title }}</label>
+        <span class="hex" id="hex-{{ field }}">{{ value }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="controls">
+      <button class="btn btn-start" type="submit">Save palette</button>
+    </div>
+  </form>
+  <form method="post" action="/settings/theme/reset" style="margin-top:10px">
+    <button class="btn btn-ghost" type="submit">Reset to default</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Risk &amp; sizing policy</h2>
+  <p class="panel-sub">
+    The fixed-fractional sizing config every validation-path order sizes
+    against (<code>risk/fixed_risk.py</code>). Read-only here — it is a code
+    constant, not a dashboard preference, so it can't drift from what the
+    engine actually runs. Change it in code and redeploy to change it live.
+  </p>
+  <div class="stat-grid">
+    <div class="stat">
+      <div class="stat-label">Risk per trade</div>
+      <div class="stat-value">{{ "%.1f%%"|format(risk_config.risk_pct * 100) }}</div>
+      <div class="stat-note">of equity, at the executable stop</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Max position size (event contracts)</div>
+      <div class="stat-value">{{ "%.1f%%"|format(risk_config.max_position_pct * 100) }}</div>
+      <div class="stat-note">of equity, notional hard cap</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Max position size (perps)</div>
+      <div class="stat-value">{{ "%.1f%%"|format(perp_max_position_pct * 100) }}</div>
+      <div class="stat-note">deliberately looser — perp lot sizes are fixed per asset</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Fee coefficient</div>
+      <div class="stat-value">{{ "%.4f"|format(risk_config.fee_coefficient) }}</div>
+      <div class="stat-note">included in the loss budget, not just PnL</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Config version</div>
+      <div class="stat-value mono" style="font-size:14px">{{ risk_config.version }}</div>
+      <div class="stat-note">stamped onto every sized trade</div>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Validation gate policy</h2>
+  <p class="panel-sub">
+    Promotion thresholds a strategy must clear before it is eligible to run.
+    Read-only, sourced from <code>backtest/promotion_gate.py</code>.
+  </p>
+  <div class="table-scroll"><table class="compact">
+    <tbody>
+      <tr><th scope="row">Min trades</th><td class="mono">{{ policy.min_trades }}</td></tr>
+      <tr><th scope="row">Min folds</th><td class="mono">{{ policy.min_folds }}</td></tr>
+      <tr><th scope="row">Fold geometry</th><td class="mono">{{ fold_geometry }}</td></tr>
+      <tr><th scope="row">Min coverage</th><td class="mono">{{ "%.2f%%"|format(policy.min_coverage * 100) }}</td></tr>
+      <tr><th scope="row">Min expectancy</th><td class="mono">${{ "%.2f"|format(policy.min_expectancy_usd) }}</td></tr>
+      <tr><th scope="row">Require positive CI</th><td class="mono">{{ policy.require_positive_ci }}</td></tr>
+      <tr><th scope="row">Max Brier score</th><td class="mono">{{ policy.max_brier }}</td></tr>
+      <tr><th scope="row">Require validation evidence</th><td class="mono">{{ policy.require_validation_evidence }}</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+{% endblock %}

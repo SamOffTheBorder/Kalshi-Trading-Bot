@@ -21,6 +21,7 @@ from __future__ import annotations
 from kalshi_bot.data.perps.funding import (
     FundingBackfillResult,
     FundingEstimateCaptureResult,
+    NoCryptoPerpsMatchedError,
     backfill_funding,
     capture_funding_estimates,
     resolve_crypto_perp_tickers,
@@ -43,6 +44,7 @@ __all__ = [
     "FundingEstimateCaptureResult",
     "KalshiPerpMarkSource",
     "MarkPollResult",
+    "NoCryptoPerpsMatchedError",
     "PerpMarkReadingRaw",
     "PerpMarkSource",
     "backfill_funding",

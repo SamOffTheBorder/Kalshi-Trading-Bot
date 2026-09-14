@@ -51,3 +51,21 @@ def test_missing_spot_mapping_is_rejected_for_event_asset():
                 "15m": CryptoInstrumentConfig(series_ticker="KXBAD15M", cadence="15m")
             },
         )
+
+
+def test_shadow_lifecycle_is_valid_but_unknown_values_are_rejected():
+    shadow = CryptoInstrumentConfig(
+        cadence="15m", series_ticker="KXSHADOW15M", contract_shape="binary", lifecycle="shadow"
+    )
+    asset = CryptoAssetConfig(
+        asset_id="SHADOW",
+        display_name="Shadow",
+        correlation_group="test",
+        spot_symbols=("SHADOW-USD",),
+        event_instruments={"15m": shadow},
+    )
+    assert validate_registry([asset]) == (asset,)
+    with pytest.raises(ValueError):
+        CryptoInstrumentConfig(
+            cadence="15m", series_ticker="KXBAD15M", contract_shape="binary", lifecycle="live-ish"
+        )

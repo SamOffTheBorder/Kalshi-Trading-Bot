@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Cadence = Literal["15m", "60m"]
-LifecycleMode = Literal["observe", "backtest", "paper", "live"]
+LifecycleMode = Literal["observe", "backtest", "shadow", "paper", "live"]
 ContractShape = Literal["binary", "strike_ladder"]
 
 
@@ -111,7 +111,7 @@ def _asset(
 
 
 DEFAULT_CRYPTO_REGISTRY: tuple[CryptoAssetConfig, ...] = (
-    _asset("BTC", "backtest", btc=True),
+    _asset("BTC", "shadow", btc=True),
     _asset("ETH", "backtest"),
     _asset("SOL", "observe"),
     _asset("XRP", "observe"),
@@ -135,7 +135,7 @@ def validate_registry(
                 raise ValueError(f"{asset.asset_id}: cadence key does not match instrument")
             if instrument.series_ticker:
                 series.append(instrument.series_ticker)
-            if instrument.lifecycle not in {"observe", "backtest", "paper", "live"}:
+            if instrument.lifecycle not in {"observe", "backtest", "shadow", "paper", "live"}:
                 raise ValueError(f"{asset.asset_id}: unsupported lifecycle mode")
     if len(series) != len(set(series)):
         raise ValueError("duplicate event series in crypto registry")

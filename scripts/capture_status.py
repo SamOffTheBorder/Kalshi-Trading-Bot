@@ -77,7 +77,10 @@ def main() -> int:
         "select count(*), max(observed_at) from sports_market_discovery"
     )
     se = one("select count(*) from sports_market_discovery where eligible=1")
-    print(f"    sports discovery .. {sd[0]:>12,}   rows ({se[0]:,} eligible), seen {_age(sd[1], now)}")
+    print(
+        f"    sports discovery .. {sd[0]:>12,}   rows ({se[0]:,} eligible), "
+        f"seen {_age(sd[1], now)}"
+    )
 
     # --- Phase 2: live-only feeds ----------------------------------------
     print("\n  PHASE 2  live-only feeds (should keep advancing while running)")

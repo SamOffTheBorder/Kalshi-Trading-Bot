@@ -14,15 +14,33 @@ is never used.
 `may_fill=False` (a shadow-lifecycle asset, or a shadow-mode run) still
 produces a full decision and records the observable would-fill, but never
 calls `place_order` — that is §8.7 shadow mode with no separate code path.
+
+Strategy seam (strategy-lab-multi-account §2): the adapter drives a
+`StrategyProtocol` object — the same object the backtest engine and
+walk-forward harness run — by assembling a `StrategyContext` for each
+evaluation via `StrategyContextBuilder`. Context assembly is causal by
+construction: every historical input is filtered on `available_at <= now_ts`
+(BRTI) or `open_ts < now_ts` (spot bars), mirroring
+`BacktestEngine._bars_before`'s look-ahead discipline. A missing input leaves
+its context field unset (`trend_zscore=None`, empty `spot_bars`/
+`brti_readings`, sentinel `spot=0.0`) and the strategy decides — the adapter
+never forward-fills or substitutes a default value.
+
+The legacy `StrategyFn` callable (`Callable[[PredictionQuote],
+StrategySignal]`) is retained only for the sports domain and for existing
+tests that inject a quote->signal lambda; when `strategy` is a
+`StrategyProtocol` object the context path is used.
 """
 
 from __future__ import annotations
 
 import asyncio
+import bisect
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from kalshi_bot.config.crypto_registry import (
@@ -33,7 +51,31 @@ from kalshi_bot.config.lifecycle import Domain
 from kalshi_bot.execution.broker_protocol import MarketSnapshot, OrderRequest
 from kalshi_bot.execution.orchestrator import AdapterDecision, ReconciliationOutcome
 from kalshi_bot.execution.paper_broker import PaperBroker
-from kalshi_bot.storage.models import KalshiMarket, SimulatedTrade
+from kalshi_bot.signals.settlement_window import BRTIReading
+from kalshi_bot.signals.volatility import estimate_volatility
+from kalshi_bot.storage.models import BRTIObservation, KalshiMarket, SimulatedTrade, SpotCandle
+from kalshi_bot.strategy.base import Action, Decision, StrategyContext
+from kalshi_bot.strategy.levels import SpotBar
+
+# BTC index labels accepted for the KXBTC15M settlement series — same set the
+# backtest engine filters `BRTIObservation` by, so a paper run never mixes
+# another CF Benchmarks index into the settlement calculation.
+_BTC_BRTI_SOURCE_LABELS = ("brti", "BRTI", "kalshi:cfbenchmarks/BRTI")
+
+# How far back the per-evaluation BRTI slice reaches: the 15-minute market
+# lifetime plus the 60 s reference average and a short-horizon trend lookback.
+_BRTI_SLICE_WINDOW_S = 1_800
+
+# Asset id -> spot symbol for the SpotCandle / volatility inputs.
+_ASSET_SPOT_SYMBOL = {
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+    "SOL": "SOL-USD",
+    "XRP": "XRP-USD",
+}
+
+_TREND_LOOKBACK_S = 86_400
+_SPOT_BAR_WINDOW = 48
 
 
 @dataclass(frozen=True)
@@ -48,12 +90,14 @@ class PredictionQuote:
     yes_bid_cents: int | None
     yes_ask_cents: int | None
     result: str | None = None  # set once the market resolved
+    strike_type: str | None = None  # greater | less | between
+    floor_strike: float | None = None
+    cap_strike: float | None = None
 
 
-# A strategy here is any callable that turns a quote into a decision.
-# It returns (action, side, limit_price_cents, meta) where action is one of
-# "hold" | "buy". This keeps the adapter independent of any concrete
-# strategy class while the change's strategy selection is still open.
+# A legacy strategy callable: turns a quote into a coarse buy/hold signal.
+# Retained for the sports domain and for tests that inject a lambda; a
+# `StrategyProtocol` object is the real path (see module docstring).
 StrategyFn = Callable[[PredictionQuote], "StrategySignal"]
 
 
@@ -71,6 +115,226 @@ def hold_strategy(_quote: PredictionQuote) -> StrategySignal:
     return StrategySignal(action="hold", reason="no_strategy_configured")
 
 
+def _is_strategy_protocol(obj: object) -> bool:
+    """True when `obj` is a `StrategyProtocol` (has `evaluate` + `name`),
+    rather than a plain `StrategyFn` callable."""
+    return hasattr(obj, "evaluate") and hasattr(obj, "name") and not isinstance(obj, type)
+
+
+# --------------------------------------------------------------------------
+# Strategy context assembly (§2.1-2.3)
+# --------------------------------------------------------------------------
+
+
+class StrategyContextBuilder:
+    """Assembles a `StrategyContext` for one (quote, now_ts) pair.
+
+    Spot close/OHLCV history and BRTI readings are loaded once per asset and
+    cached for the run's lifetime, then sliced per evaluation with a bisect —
+    the same shape `BacktestEngine` uses. Every slice is causal: BRTI on
+    `available_at <= now_ts`, spot bars on `open_ts < now_ts`, spot/vol on the
+    latest close at-or-before `now_ts - stride`.
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        *,
+        trend_lookback_s: int = _TREND_LOOKBACK_S,
+        spot_bar_window: int = _SPOT_BAR_WINDOW,
+    ) -> None:
+        self._session = session
+        self._trend_lookback_s = trend_lookback_s
+        self._spot_bar_window = spot_bar_window
+        self._hourly: dict[str, tuple[list[int], list[float]]] = {}
+        self._daily: dict[str, tuple[list[int], list[float]]] = {}
+        self._bars: dict[str, tuple[list[int], list[SpotBar]]] = {}
+        self._brti: tuple[list[int], tuple[BRTIReading, ...]] | None = None
+
+    # -- loaders (cached per asset / run) --------------------------------
+
+    def _load_close(self, symbol: str, period_minutes: int) -> tuple[list[int], list[float]]:
+        rows = self._session.execute(
+            select(SpotCandle.open_ts, SpotCandle.close)
+            .where(SpotCandle.symbol == symbol, SpotCandle.period_minutes == period_minutes)
+            .order_by(SpotCandle.open_ts)
+        ).all()
+        by_ts: dict[int, float] = {ts: close for ts, close in rows}
+        sorted_ts = sorted(by_ts)
+        return sorted_ts, [by_ts[t] for t in sorted_ts]
+
+    def _load_bars(self, symbol: str) -> tuple[list[int], list[SpotBar]]:
+        rows = self._session.execute(
+            select(SpotCandle)
+            .where(SpotCandle.symbol == symbol, SpotCandle.period_minutes == 60)
+            .order_by(SpotCandle.open_ts)
+        ).scalars()
+        by_ts: dict[int, SpotBar] = {}
+        for row in rows:
+            by_ts[row.open_ts] = SpotBar(
+                ts=row.open_ts,
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
+        ordered = [by_ts[t] for t in sorted(by_ts)]
+        return [b.ts for b in ordered], ordered
+
+    def _hourly_for(self, symbol: str) -> tuple[list[int], list[float]]:
+        if symbol not in self._hourly:
+            self._hourly[symbol] = self._load_close(symbol, 60)
+        return self._hourly[symbol]
+
+    def _daily_for(self, symbol: str) -> tuple[list[int], list[float]]:
+        if symbol not in self._daily:
+            self._daily[symbol] = self._load_close(symbol, 1440)
+        return self._daily[symbol]
+
+    def _bars_for(self, symbol: str) -> tuple[list[int], list[SpotBar]]:
+        if symbol not in self._bars:
+            self._bars[symbol] = self._load_bars(symbol)
+        return self._bars[symbol]
+
+    def _load_brti(self) -> tuple[list[int], tuple[BRTIReading, ...]]:
+        if self._brti is not None:
+            return self._brti
+        rows = self._session.execute(
+            select(BRTIObservation)
+            .where(
+                or_(
+                    BRTIObservation.source.is_(None),
+                    BRTIObservation.source.in_(_BTC_BRTI_SOURCE_LABELS),
+                    BRTIObservation.source.ilike("%brti%"),
+                )
+            )
+            .order_by(BRTIObservation.available_at)
+        ).scalars()
+        readings = tuple(
+            BRTIReading(
+                observed_at=r.observed_at,
+                value=float(r.value_dollars),
+                available_at=r.available_at,
+            )
+            for r in rows
+        )
+        self._brti = ([r.usable_at for r in readings], readings)
+        return self._brti
+
+    # -- per-evaluation slices ----------------------------------------
+
+    @staticmethod
+    def _latest_before(ts_list: list[int], values: list[float], ts: int) -> float | None:
+        idx = bisect.bisect_right(ts_list, ts) - 1
+        return values[idx] if idx >= 0 else None
+
+    def _bars_before(self, symbol: str, ts: int) -> tuple[SpotBar, ...]:
+        bar_ts, bars = self._bars_for(symbol)
+        idx = bisect.bisect_left(bar_ts, ts)
+        return tuple(bars[max(0, idx - self._spot_bar_window) : idx])
+
+    def _brti_before(self, ts: int) -> tuple[BRTIReading, ...]:
+        usable_ts, readings = self._load_brti()
+        hi = bisect.bisect_right(usable_ts, ts)
+        lo = bisect.bisect_left(usable_ts, ts - _BRTI_SLICE_WINDOW_S, 0, hi)
+        return readings[lo:hi]
+
+    # -- build --------------------------------------------------------
+
+    def build(self, quote: PredictionQuote, *, now_ts: int) -> StrategyContext:
+        symbol = _ASSET_SPOT_SYMBOL.get(quote.asset_id.upper())
+
+        spot = 0.0
+        vol_annual = 0.0
+        vol_source = "unavailable"
+        trend_zscore: float | None = None
+        spot_bars: tuple[SpotBar, ...] = ()
+
+        if symbol is not None:
+            hourly_ts, hourly_close = self._hourly_for(symbol)
+            daily_ts, daily_close = self._daily_for(symbol)
+
+            spot_val = self._latest_before(hourly_ts, hourly_close, now_ts)
+            if spot_val is not None:
+                spot = spot_val
+
+            cutoff = bisect.bisect_right(daily_ts, now_ts)
+            try:
+                vol = estimate_volatility(daily_close[:cutoff])
+            except ValueError:
+                vol = None
+            if vol is not None:
+                vol_annual = vol.vol_annual
+                vol_source = vol.source
+
+            spot_then = self._latest_before(
+                hourly_ts, hourly_close, now_ts - self._trend_lookback_s
+            )
+            if (
+                spot_val is not None
+                and spot_then is not None
+                and spot_then > 0
+                and vol_annual > 0
+            ):
+                lookback_years = self._trend_lookback_s / (365 * 24 * 3600)
+                trend_zscore = math.log(spot_val / spot_then) / (
+                    vol_annual * math.sqrt(lookback_years)
+                )
+
+            spot_bars = self._bars_before(symbol, now_ts)
+
+        return StrategyContext(
+            market_ticker=quote.market_ticker,
+            series_ticker=quote.series_ticker,
+            strike_type=quote.strike_type or "greater",
+            floor_strike=quote.floor_strike,
+            cap_strike=quote.cap_strike,
+            now_ts=now_ts,
+            close_ts=quote.close_ts,
+            yes_bid_cents=quote.yes_bid_cents,
+            yes_ask_cents=quote.yes_ask_cents,
+            spot=spot,
+            vol_annual=vol_annual,
+            vol_source=vol_source,
+            trend_zscore=trend_zscore,
+            spot_bars=spot_bars,
+            brti_readings=self._brti_before(now_ts),
+        )
+
+
+def _decision_to_signal(decision: Decision) -> StrategySignal:
+    """Translate a `StrategyProtocol` `Decision` into the adapter's coarse
+    buy/hold `StrategySignal`. HOLD -> hold; BUY_YES/BUY_NO -> buy with the
+    side-consistent executable price the decision already carries."""
+    if decision.action == Action.HOLD:
+        return StrategySignal(
+            action="hold",
+            reason=decision.hold_reason or "strategy_hold",
+            meta={"strategy_name": decision.strategy_name},
+        )
+
+    side = "yes" if decision.action == Action.BUY_YES else "no"
+    meta: dict[str, object] = {
+        "strategy_name": decision.strategy_name,
+        "fair_probability": decision.fair_probability,
+        "fee_adjusted_edge": decision.fee_adjusted_edge,
+    }
+    if decision.model_meta:
+        meta["model_meta"] = decision.model_meta
+    limit = decision.entry_price_cents
+    if limit is None and decision.max_entry_price_cents is not None:
+        limit = decision.max_entry_price_cents
+    return StrategySignal(
+        action="buy",
+        side=side,
+        limit_price_cents=limit,
+        quantity=1,
+        reason=None,
+        meta=meta,
+    )
+
+
 @dataclass
 class PredictionPaperAdapter:
     """Shared-envelope wrapper over `PaperBroker` for one paper run."""
@@ -79,7 +343,7 @@ class PredictionPaperAdapter:
     quote_source: Callable[[str, int], PredictionQuote | None]
     settlement_source: Callable[[str], str | None]
     starting_cash_usd: float
-    strategy: StrategyFn = hold_strategy
+    strategy: StrategyFn | object = hold_strategy
     registry: Sequence[CryptoAssetConfig] = DEFAULT_CRYPTO_REGISTRY
     max_data_age_seconds: int = 120
 
@@ -88,6 +352,7 @@ class PredictionPaperAdapter:
 
     _broker: PaperBroker = field(init=False)
     _open_by_asset: dict[str, str] = field(default_factory=dict, init=False)
+    _context_builder: StrategyContextBuilder | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self._broker = PaperBroker(self.session, starting_cash_usd=self.starting_cash_usd)
@@ -96,8 +361,10 @@ class PredictionPaperAdapter:
             asset = self._asset_for_ticker(ticker)
             if asset is not None:
                 self._open_by_asset[asset] = ticker
+        if _is_strategy_protocol(self.strategy):
+            self._context_builder = StrategyContextBuilder(self.session)
 
-    # -- registry resolution -------------------------------------------
+    # -- registry resolution -----------------------------------------
 
     def _series_for_asset(self, asset_id: str) -> tuple[str, ...]:
         for asset in self.registry:
@@ -116,7 +383,21 @@ class PredictionPaperAdapter:
                     return asset.asset_id
         return None
 
-    # -- DomainPaperAdapter --------------------------------------------
+    # -- strategy dispatch ------------------------------------------
+
+    def _run_strategy(self, quote: PredictionQuote, now_ts: int) -> StrategySignal:
+        """Evaluate the configured strategy for one quote.
+
+        A `StrategyProtocol` object gets a causally-assembled
+        `StrategyContext`; a legacy `StrategyFn` callable gets the raw quote.
+        """
+        if self._context_builder is not None:
+            context = self._context_builder.build(quote, now_ts=now_ts)
+            decision = self.strategy.evaluate(context)  # type: ignore[union-attr]
+            return _decision_to_signal(decision)
+        return self.strategy(quote)  # type: ignore[operator]
+
+    # -- DomainPaperAdapter ---------------------------------------
 
     def reconcile(self, asset_id: str) -> ReconciliationOutcome:
         """Settle any restored open position whose official result is now
@@ -177,7 +458,7 @@ class PredictionPaperAdapter:
                 payload={"market_ticker": quote.market_ticker},
             )
 
-        signal = self.strategy(quote)
+        signal = self._run_strategy(quote, now_ts)
         base_payload: dict[str, object] = {
             "market_ticker": quote.market_ticker,
             "series_ticker": quote.series_ticker,
@@ -259,7 +540,7 @@ class PredictionPaperAdapter:
             payload=base_payload,
         )
 
-    # -- helpers ------------------------------------------------------
+    # -- helpers ---------------------------------------------------
 
     @staticmethod
     def _would_fill(quote: PredictionQuote, side: str, limit_cents: int) -> int | None:
@@ -301,6 +582,13 @@ def _iso_to_ts(value: str | None) -> int | None:
     try:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
     except ValueError:
+        return None
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
         return None
 
 
@@ -346,6 +634,9 @@ def kalshi_public_quote_source(
                 observed_at=now_ts,
                 yes_bid_cents=_yes_cents(m.get("yes_bid_dollars")),
                 yes_ask_cents=_yes_cents(m.get("yes_ask_dollars")),
+                strike_type=m.get("strike_type"),
+                floor_strike=_float_or_none(m.get("floor_strike")),
+                cap_strike=_float_or_none(m.get("cap_strike")),
             )
             if best is None or quote.close_ts < best.close_ts:
                 best = quote
@@ -371,6 +662,7 @@ def db_settlement_source(session: Session) -> Callable[[str], str | None]:
 __all__ = [
     "PredictionPaperAdapter",
     "PredictionQuote",
+    "StrategyContextBuilder",
     "StrategyFn",
     "StrategySignal",
     "db_settlement_source",

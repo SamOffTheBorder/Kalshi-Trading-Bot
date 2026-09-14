@@ -48,9 +48,45 @@ class AggregateReport:
     partial_fills: int
     promotion_status: str = "not_evaluated"
     promotion_reasons: tuple[str, ...] = ()
+    manifest_provenance_class: str | None = None
+    """`source_native` | `reconstructed` | None (unknown/not manifest-backed).
+    Drives the diagnostic-only classification in promotion_gate.py
+    (brti-constituent-history §D6)."""
+    reconstruction_error: dict[str, object] | None = None
+    """The reconstruction-error report (or `{"status": "unmeasured"}`) for
+    any reconstructed partitions behind this run. Required whenever
+    manifest_provenance_class == "reconstructed"; never omitted silently."""
+    component_gates: tuple[ComponentGateResult, ...] = ()
+    """Independent asset/cadence/domain verdicts used by promotion."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class ComponentGateResult:
+    """Domain-neutral input to the worst-component promotion gate."""
+
+    component_id: str
+    sample_count: int
+    min_samples: int
+    data_ok: bool
+    economics_ok: bool
+    risk_ok: bool
+    reasons: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return (
+            self.sample_count >= self.min_samples
+            and self.data_ok
+            and self.economics_ok
+            and self.risk_ok
+            and not self.reasons
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {**asdict(self), "passed": self.passed, "reasons": list(self.reasons)}
 
 
 def parameter_stability(values: dict[str, Sequence[float]]) -> dict[str, float]:
@@ -106,7 +142,12 @@ def build_fold_report(
 
 
 def aggregate_reports(
-    reports: list[FoldReport], *, evidence_class: str = "validation"
+    reports: list[FoldReport],
+    *,
+    evidence_class: str = "validation",
+    manifest_provenance_class: str | None = None,
+    reconstruction_error: dict[str, object] | None = None,
+    component_gates: Sequence[ComponentGateResult] = (),
 ) -> AggregateReport:
     trades = sum(r.n_trades for r in reports)
     net = sum(r.net_pnl_usd for r in reports)
@@ -119,6 +160,9 @@ def aggregate_reports(
         modeled_cost_usd=sum(r.modeled_cost_usd for r in reports),
         fills=sum(r.fills for r in reports), cancels=sum(r.cancels for r in reports),
         partial_fills=sum(r.partial_fills for r in reports),
+        manifest_provenance_class=manifest_provenance_class,
+        reconstruction_error=reconstruction_error,
+        component_gates=tuple(component_gates),
     )
 
 
@@ -129,6 +173,7 @@ def _weighted_mean(values: list[tuple[float | None, int]]) -> float | None:
 
 __all__ = [
     "AggregateReport",
+    "ComponentGateResult",
     "FoldReport",
     "aggregate_reports",
     "build_fold_report",

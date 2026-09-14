@@ -25,4 +25,4 @@
 - [x] 4.1 Define an opt-in external sports-source adapter contract that requires provider, endpoint, observed time, available time, and provenance; do not select or add a provider.
 - [x] 4.2 Document the sports feasibility operator runbook, including supported market shape, manual capture cadence, rule review, and the prohibition on paper/live orders.
 - [ ] 4.3 Pre-register the first pilot's sport/series, discovery thresholds, holdout boundary, fee/slippage assumptions, and minimum sample/confidence gates before examining its holdout.
-- [ ] 4.4 Run the first complete feasibility report after sufficient foreground data is captured; record `research_promising`, `park`, or `insufficient_data` without enabling execution.
+- [ ] 4.4 Run the first complete feasibility report after sufficient foreground data is captured; record `research_promising`, `park`, or `insufficient_data` without enabling execution. (Blocked by current zero-row `sports_candles` capture; discovery alone is not sufficient evidence.)

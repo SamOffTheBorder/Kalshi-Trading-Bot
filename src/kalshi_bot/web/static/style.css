@@ -95,6 +95,19 @@ body {
   color: var(--muted);
 }
 
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  transition: background 0.12s, color 0.12s;
+}
+
+.icon-link:hover, .icon-link.active { color: var(--text); background: var(--panel-2); }
+
 /* ------------------------------------------------------------------ main */
 
 main {
@@ -462,3 +475,120 @@ code {
 /* ---------------------------------------------------------- sparkline */
 
 .spark { display: block; width: 100%; height: 56px; }
+
+/* --------------------------------------------------------------- theme */
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.color-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+}
+
+.color-field input[type="color"] {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  flex: none;
+}
+
+.color-field label {
+  font-size: 12.5px;
+  color: var(--text);
+  flex: 1;
+}
+
+.color-field .hex {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.preset-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel-2);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--text);
+  padding: 0;
+  transition: border-color 0.12s;
+}
+
+.preset-card:hover { border-color: #3b4656; }
+
+.preset-swatch { display: flex; height: 34px; }
+.preset-swatch span { flex: 1; }
+.preset-card .preset-label { display: block; padding: 9px 11px; font-size: 12.5px; font-weight: 600; }
+
+/* ----------------------------------------------------------- trade plan */
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 10px 0 4px;
+}
+
+.plan-cell {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  background: var(--bg);
+}
+
+.plan-cell .plan-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.plan-cell .plan-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  font-size: 14.5px;
+}
+
+.plan-cell.plan-stop .plan-value { color: var(--red); }
+.plan-cell.plan-target .plan-value { color: var(--green); }
+
+.plan-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--red-dim), var(--panel-2) 48%, var(--green-dim));
+  border: 1px solid var(--border-soft);
+  margin: 12px 0 6px;
+}
+
+.plan-bar .plan-marker {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 16px;
+  background: var(--text);
+}

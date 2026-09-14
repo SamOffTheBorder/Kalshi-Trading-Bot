@@ -5,10 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Kalshi Bot{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
+  {#  Operator theme overrides, rendered server-side from DashboardSetting so
+      the chosen palette applies before first paint — no flash of default
+      colors and no client-side theme script. #}
+  {% if theme_css %}<style>{{ theme_css | safe }}</style>{% endif %}
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%233ecf8e'/></svg>">
-  {#  The dashboard deliberately has no JS dependency. The control buttons are
-      plain <form> POSTs, so the kill switch works with no network, no CDN and
-      no scripting — the one control that must never depend on a CDN being up. #}
+  {#  The control buttons remain plain POST forms, so the kill switch works
+      with no refresh client. The optional local refresh client is read-only. #}
+  <script defer src="/static/live.js"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -21,6 +25,7 @@
       <a href="/perps" class="{{ 'active' if active_page == 'perps' else '' }}">Perpetuals</a>
       <a href="/prediction-markets" class="{{ 'active' if active_page == 'prediction-markets' else '' }}">Prediction markets</a>
       <a href="/data" class="{{ 'active' if active_page == 'data' else '' }}">Data &amp; capture</a>
+      <a href="/strategy-lab" class="{{ 'active' if active_page == 'strategy-lab' else '' }}">Strategy lab</a>
       <a href="/runs" class="{{ 'active' if active_page == 'runs' else '' }}">Backtest runs</a>
       <a href="/operations" class="{{ 'active' if active_page == 'operations' else '' }}">Operations</a>
     </nav>
@@ -33,6 +38,12 @@
         {% endif %}
       {% endif %}
       <span>{{ now_utc }}</span>
+      <a href="/settings" class="icon-link {{ 'active' if active_page == 'settings' else '' }}" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6">
+          <circle cx="10" cy="10" r="2.6"/>
+          <path d="M10 2.6v2.1M10 15.3v2.1M17.4 10h-2.1M4.7 10H2.6M15.1 4.9l-1.5 1.5M6.4 13.6l-1.5 1.5M15.1 15.1l-1.5-1.5M6.4 6.4L4.9 4.9"/>
+        </svg>
+      </a>
     </div>
   </header>
   <main>

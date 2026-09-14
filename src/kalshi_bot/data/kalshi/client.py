@@ -150,10 +150,14 @@ class KalshiPublicClient:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """One page of public trades, suitable for foreground capture."""
         params: dict[str, Any] = {"limit": limit}
-        if ticker: params["ticker"] = ticker
-        if min_ts is not None: params["min_ts"] = min_ts
-        if max_ts is not None: params["max_ts"] = max_ts
-        if cursor: params["cursor"] = cursor
+        if ticker:
+            params["ticker"] = ticker
+        if min_ts is not None:
+            params["min_ts"] = min_ts
+        if max_ts is not None:
+            params["max_ts"] = max_ts
+        if cursor:
+            params["cursor"] = cursor
         data = self._get("/markets/trades", params)
         return data.get("trades", []), data.get("cursor") or None
 

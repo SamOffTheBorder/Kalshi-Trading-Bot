@@ -29,6 +29,23 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 
+class PerpBacktestError(ValueError):
+    """A perp backtest input cannot produce a causal executable fill."""
+
+
+@dataclass(frozen=True)
+class PerpBacktestQuote:
+    """Causal two-sided quote/mark snapshot used by the linear simulator."""
+
+    ts: int
+    available_at: int
+    bid: float | None
+    ask: float | None
+    mark: float
+    multiplier: float = 1.0
+    liquidation_price: float | None = None
+
+
 @dataclass(frozen=True)
 class PerpFill:
     """One executed perp order. `size` is signed contracts: positive opens/
@@ -93,6 +110,122 @@ class PerpTrade:
     @property
     def entry_notional_usd(self) -> float:
         return abs(self.size) * self.entry_mark
+
+
+def _liquidation_price(
+    *,
+    signed_size: float,
+    entry_price: float,
+    multiplier: float,
+    collateral_usd: float,
+    maintenance_margin_rate: float,
+) -> float | None:
+    """Solve the conservative maintenance-margin crossing for one position."""
+    quantity = abs(signed_size) * multiplier
+    if quantity <= 0 or collateral_usd <= 0:
+        return None
+    if signed_size > 0:
+        price = (quantity * entry_price - collateral_usd) / (
+            quantity * (1.0 - maintenance_margin_rate)
+        )
+    else:
+        price = (quantity * entry_price + collateral_usd) / (
+            quantity * (1.0 + maintenance_margin_rate)
+        )
+    return price if price > 0 else None
+
+
+def _quote_fill_price(
+    quote: PerpBacktestQuote, signed_size: float, *, label: str, opening: bool
+) -> float:
+    if quote.available_at > quote.ts:
+        raise PerpBacktestError(f"{label}_quote_unavailable")
+    if quote.bid is None or quote.ask is None:
+        raise PerpBacktestError(f"{label}_quote_one_sided")
+    if quote.bid <= 0 or quote.ask <= 0 or quote.bid > quote.ask or quote.mark <= 0:
+        raise PerpBacktestError(f"{label}_quote_invalid")
+    if opening:
+        return quote.ask if signed_size > 0 else quote.bid
+    return quote.bid if signed_size > 0 else quote.ask
+
+
+def simulate_perp_trade(
+    *,
+    symbol: str,
+    entry_quote: PerpBacktestQuote,
+    exit_quote: PerpBacktestQuote,
+    signed_size: float,
+    collateral_usd: float,
+    fee_rate: float,
+    funding_events: tuple[FundingEvent, ...] = (),
+    max_leverage: float = 2.0,
+    maintenance_margin_rate: float = 0.005,
+) -> PerpTrade:
+    """Create one executable, causal round-trip in the independent perp ledger.
+
+    Longs enter at ask and exit at bid; shorts enter at bid and exit at ask.
+    Fees are charged on both side-aware fills, funding is accepted only as
+    already-realized signed ledger events, and entry leverage/liquidation
+    distance are recorded on the resulting ``PerpTrade``.
+    """
+    if not symbol or signed_size == 0:
+        raise PerpBacktestError("invalid_position")
+    if exit_quote.ts <= entry_quote.ts:
+        raise PerpBacktestError("exit_not_after_entry")
+    if fee_rate < 0 or collateral_usd <= 0:
+        raise PerpBacktestError("invalid_cost_or_collateral")
+    if not 0.0 < maintenance_margin_rate < 1.0:
+        raise PerpBacktestError("invalid_maintenance_margin")
+    if max_leverage <= 0:
+        raise PerpBacktestError("invalid_max_leverage")
+    entry_price = _quote_fill_price(entry_quote, signed_size, label="entry", opening=True)
+    exit_price = _quote_fill_price(exit_quote, signed_size, label="exit", opening=False)
+    if entry_quote.multiplier <= 0 or entry_quote.multiplier != exit_quote.multiplier:
+        raise PerpBacktestError("incompatible_multiplier")
+    multiplier = entry_quote.multiplier
+    entry_notional = abs(signed_size) * multiplier * entry_price
+    entry_leverage = entry_notional / collateral_usd
+    if entry_leverage > max_leverage + 1e-9:
+        raise PerpBacktestError("entry_leverage_exceeded")
+    for event in funding_events:
+        if not entry_quote.ts <= event.ts <= exit_quote.ts:
+            raise PerpBacktestError("funding_event_outside_hold")
+        if event.position_notional_usd < 0:
+            raise PerpBacktestError("invalid_funding_notional")
+
+    liquidation = entry_quote.liquidation_price or _liquidation_price(
+        signed_size=signed_size,
+        entry_price=entry_price,
+        multiplier=multiplier,
+        collateral_usd=collateral_usd,
+        maintenance_margin_rate=maintenance_margin_rate,
+    )
+    marks = (entry_quote.mark, exit_quote.mark)
+    distances = []
+    if liquidation is not None:
+        distances = [
+            (
+                (mark - liquidation) / mark
+                if signed_size > 0
+                else (liquidation - mark) / mark
+            )
+            for mark in marks
+        ]
+    notionals = [entry_notional, abs(signed_size) * multiplier * exit_quote.mark]
+    notionals.extend(event.position_notional_usd for event in funding_events)
+    return PerpTrade(
+        symbol=symbol,
+        entry_ts=entry_quote.ts,
+        exit_ts=exit_quote.ts,
+        size=signed_size * multiplier,
+        entry_mark=entry_price,
+        exit_mark=exit_price,
+        entry_fee_usd=entry_notional * fee_rate,
+        exit_fee_usd=abs(signed_size) * multiplier * exit_price * fee_rate,
+        funding_events=funding_events,
+        max_leverage_used=max(notionals) / collateral_usd,
+        min_distance_to_liquidation=min(distances) if distances else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -241,6 +374,8 @@ def build_perp_report(
 
 __all__ = [
     "FundingEvent",
+    "PerpBacktestError",
+    "PerpBacktestQuote",
     "PerpFill",
     "PerpLedgerMetrics",
     "PerpPromotionDecision",
@@ -249,4 +384,5 @@ __all__ = [
     "build_perp_report",
     "compute_perp_metrics",
     "evaluate_perp_promotion",
+    "simulate_perp_trade",
 ]

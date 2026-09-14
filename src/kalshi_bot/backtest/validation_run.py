@@ -65,6 +65,7 @@ from kalshi_bot.strategy.short_horizon_trend import (
     TrendConditionedConfig,
     TrendConditionedSettlementStrategy,
 )
+from kalshi_bot.strategy.underlying_features import UnderlyingFeatures
 
 SERIES = "KXBTC15M"
 DEFAULT_STARTING_CASH_USD = 1_000.0
@@ -186,6 +187,8 @@ def _run_one_fold(
     candidate_count: int,
     fixed_risk_config: FixedRiskConfig,
     starting_cash_usd: float,
+    underlying_features: tuple[UnderlyingFeatures, ...],
+    require_source_alignment: bool,
 ) -> tuple[FoldReport, dict[str, float]]:
     """Run one walk-forward fold with fresh engine/broker/guard state and
     return its report plus this fold's {market_ticker: raw P(YES)} for the
@@ -211,6 +214,8 @@ def _run_one_fold(
             candle_period_minutes=1,
             sizing_mode="fixed_risk",
             fixed_risk_config=fixed_risk_config,
+            underlying_features=underlying_features,
+            require_source_alignment=require_source_alignment,
         )
         asyncio.run(
             engine.run(
@@ -272,6 +277,8 @@ def run_arm(
     fixed_risk_config: FixedRiskConfig,
     starting_cash_usd: float,
     policy: PromotionPolicy,
+    underlying_features: tuple[UnderlyingFeatures, ...] = (),
+    require_source_alignment: bool = False,
 ) -> dict[str, object]:
     """Walk-forward one strategy arm across all folds and gate the aggregate.
 
@@ -302,6 +309,8 @@ def run_arm(
                 candidate_count=candidate_count,
                 fixed_risk_config=fixed_risk_config,
                 starting_cash_usd=starting_cash_usd,
+                underlying_features=underlying_features,
+                require_source_alignment=require_source_alignment,
             )
             # Roll this fold's pairs into the calibration set for later folds.
             with session_factory() as s:
@@ -332,6 +341,8 @@ def run_validation_arms(
     starting_cash_usd: float = DEFAULT_STARTING_CASH_USD,
     fixed_risk_config: FixedRiskConfig | None = None,
     policy: PromotionPolicy | None = None,
+    underlying_features: tuple[UnderlyingFeatures, ...] = (),
+    require_source_alignment: bool = False,
 ) -> dict[str, object]:
     """Run every arm and assemble the reproducible KXBTC15M verdict.
 
@@ -394,6 +405,8 @@ def run_validation_arms(
             fixed_risk_config=fixed_risk_config,
             starting_cash_usd=starting_cash_usd,
             policy=policy,
+            underlying_features=underlying_features,
+            require_source_alignment=require_source_alignment,
         )
         for a in ARMS
     }

@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 
 from kalshi_bot.signals.settlement_window import BRTIReading
 from kalshi_bot.strategy.levels import SpotBar
+from kalshi_bot.strategy.underlying_features import UnderlyingFeatures
 
 
 class Action(StrEnum):
@@ -68,6 +69,11 @@ class StrategyContext:
 
     # room for later signal inputs (sentiment, forecasts) without breaking the protocol
     extras: dict[str, float] = field(default_factory=dict)
+
+    # Optional external spot/perpetual feature snapshots. The caller owns
+    # source alignment and causal filtering; a prediction backtest may elect
+    # to fail closed when a supplied snapshot is not explicitly aligned.
+    underlying_features: tuple[UnderlyingFeatures, ...] = field(default_factory=tuple)
 
     @property
     def t_years(self) -> float:

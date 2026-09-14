@@ -10,7 +10,11 @@ SENSITIVE_TOKENS = ("secret", "token", "password", "private_key", "key_id", "aut
 def redact_export(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
-            key: "[REDACTED]" if any(token in key.lower() for token in SENSITIVE_TOKENS) else redact_export(item)
+            key: (
+                "[REDACTED]"
+                if any(token in key.lower() for token in SENSITIVE_TOKENS)
+                else redact_export(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):

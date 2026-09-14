@@ -116,6 +116,53 @@ def test_ledgers_stay_domain_separated_in_the_summary(session):
     assert row.fills == 0
 
 
+def test_blocked_fill_reason_surfaces_from_the_preflight_audit_event(session):
+    """brti-constituent-history §8.5: a run whose preflight admitted an asset
+    for decisions only (reconstructed manifest) surfaces that reason on the
+    dashboard summary, distinct from an ordinary healthy/blocked read."""
+    _run(session, "p1", "prediction")
+    session.add(
+        PaperAuditEvent(
+            paper_run_id="p1",
+            kind="run",
+            domain="prediction",
+            asset_id=None,
+            observed_at=1_001,
+            status="preflight_passed",
+            reason=None,
+            payload={
+                "admissions": [
+                    {
+                        "asset": "BTC",
+                        "lifecycle": "paper",
+                        "admitted": True,
+                        "may_fill": False,
+                        "reason": "reconstructed_data_not_admissible",
+                    },
+                    {
+                        "asset": "ETH",
+                        "lifecycle": "paper",
+                        "admitted": True,
+                        "may_fill": True,
+                        "reason": "admitted_for_paper",
+                    },
+                ]
+            },
+        )
+    )
+    session.flush()
+
+    row = paper_runs_overview(session)[0]
+    assert row.blocked_fill_reasons == {"BTC": "reconstructed_data_not_admissible"}
+
+
+def test_blocked_fill_reasons_is_empty_without_a_preflight_event(session):
+    _run(session, "p1", "prediction")
+    _event(session, "p1", "prediction", "decision", "hold")
+    row = paper_runs_overview(session)[0]
+    assert row.blocked_fill_reasons == {}
+
+
 def test_sports_area_never_renders_as_eligible_without_a_passing_report(session):
     # No discovery rows, no research report: sports is visibly not tradeable.
     areas = {a.key: a for a in market_areas(session)}
