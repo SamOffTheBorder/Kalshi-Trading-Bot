@@ -4,9 +4,8 @@ FastAPI + Jinja2, no build step and no JavaScript dependency: the control
 buttons are plain form POSTs so the kill switch keeps working with no network
 and no CDN reachable.
 
-Binds to localhost by default; set `DASHBOARD_AUTH_SECRET` before exposing
-beyond loopback (tasks.md 9.6) — that check lives in
-`scripts/start_dashboard.py`, since "bind address" is a deployment concern.
+Binds to localhost by default. Non-loopback access requires TLS and
+`DASHBOARD_AUTH_SECRET`; that deployment check lives in `scripts/start_dashboard.py`.
 
 Scope note: positions/orders/brackets/funding views have no live data source
 (no trading loop exists yet) and render as explicit placeholders. Everything
@@ -16,13 +15,23 @@ including HOLDs, equity, coverage — is real and reads the existing schema.
 
 from __future__ import annotations
 
+import secrets
 import threading
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -39,8 +48,11 @@ from kalshi_bot.config.settings import get_settings
 from kalshi_bot.risk.fixed_risk import FixedRiskConfig
 from kalshi_bot.storage import CouncilRunRecord, create_all_tables, get_engine, get_session_factory
 from kalshi_bot.web import queries
+from kalshi_bot.web.auth import DashboardAuth, DashboardSession
 from kalshi_bot.web.control_state import get_control_panel
+from kalshi_bot.web.export import redact_export
 from kalshi_bot.web.operations import COMMANDS, CaptureProcess, OperationManager, PaperProcess
+from kalshi_bot.web.progress import build_progress_report, report_as_dict
 from kalshi_bot.web.theme import PRESETS, ThemeColors, load_theme, save_theme, theme_css
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -112,11 +124,25 @@ templates.env.filters["ts_time"] = _ts_time
 templates.env.filters["equity_sparkline"] = _equity_sparkline
 
 
-def create_app() -> FastAPI:
+SESSION_COOKIE_NAME = "kalshi_dashboard_session"
+AUTH_EXEMPT_PATHS = {"/_auth/bootstrap", "/login"}
+
+
+def create_app(
+    *,
+    bootstrap_token: str | None = None,
+    secure_cookies: bool = False,
+) -> FastAPI:
     app = FastAPI(title="Kalshi Bot Dashboard")
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
     settings = get_settings()
+    login_secret = (
+        settings.dashboard_auth_secret.get_secret_value()
+        if settings.dashboard_auth_secret is not None
+        else None
+    )
+    auth = DashboardAuth(bootstrap_token=bootstrap_token, login_secret=login_secret)
     engine = get_engine(settings)
     create_all_tables(engine)
     session_factory = get_session_factory(engine)
@@ -142,14 +168,69 @@ def create_app() -> FastAPI:
             min_folds=policy.min_folds,
         )
 
-    def _base_context() -> dict:
+    def _base_context(request: Request) -> dict:
         with session_factory() as theme_session:
             colors = load_theme(theme_session)
+        auth_session: DashboardSession = request.state.dashboard_session
         return {
             "paper_trading": settings.paper_trading,
             "now_utc": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
             "theme_css": theme_css(colors),
+            "csrf_token": auth_session.csrf_token,
         }
+
+    def _is_fragment(request: Request) -> bool:
+        return (
+            request.url.path.startswith("/fragments/")
+            or request.headers.get("X-Dashboard-Refresh") == "1"
+        )
+
+    def _same_origin(request: Request) -> bool:
+        origin = request.headers.get("origin")
+        if origin:
+            return origin == str(request.base_url).rstrip("/")
+        referer = request.headers.get("referer")
+        if not referer:
+            return False
+        parsed = urlparse(referer)
+        return f"{parsed.scheme}://{parsed.netloc}" == str(request.base_url).rstrip("/")
+
+    async def _form_fields(request: Request) -> dict[str, str]:
+        """Parse dashboard forms without adding the unused python-multipart dependency."""
+        parsed = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+        return {key: values[-1] for key, values in parsed.items()}
+
+    def _set_session_cookie(response: Response, session: DashboardSession) -> None:
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            session.token,
+            httponly=True,
+            secure=secure_cookies,
+            samesite="lax",
+            max_age=12 * 60 * 60,
+            path="/",
+        )
+
+    @app.middleware("http")
+    async def require_dashboard_session(request: Request, call_next):
+        path = request.url.path
+        if path.startswith("/static/") or path in AUTH_EXEMPT_PATHS:
+            return await call_next(request)
+
+        session = auth.session(request.cookies.get(SESSION_COOKIE_NAME))
+        if session is None:
+            if request.method == "GET" and not _is_fragment(request):
+                return RedirectResponse("/login", status_code=303)
+            return Response(status_code=401, headers={"Cache-Control": "no-store"})
+
+        request.state.dashboard_session = session
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if not _same_origin(request):
+                return Response(status_code=403, headers={"Cache-Control": "no-store"})
+            supplied = (await _form_fields(request)).get("csrf_token", "")
+            if not secrets.compare_digest(supplied, session.csrf_token):
+                return Response(status_code=403, headers={"Cache-Control": "no-store"})
+        return await call_next(request)
 
     def _coverage_refresh_loop() -> None:
         # Full-table-scan coverage over 17M+ candle rows takes ~60-90s; compute
@@ -162,6 +243,56 @@ def create_app() -> FastAPI:
 
     threading.Thread(target=_coverage_refresh_loop, daemon=True).start()
 
+    @app.get("/_auth/bootstrap", response_class=HTMLResponse)
+    def bootstrap_page() -> HTMLResponse:
+        """No-data page; its local script reads the fragment-only launcher token."""
+        return HTMLResponse(
+            '<!doctype html><meta charset="utf-8"><title>Kalshi Bot</title>'
+            '<p id="bootstrap-status">Opening dashboard…</p>'
+            '<script src="/static/bootstrap.js"></script>',
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+        )
+
+    @app.post("/_auth/bootstrap")
+    async def exchange_bootstrap(request: Request) -> Response:
+        try:
+            payload = await request.json()
+            token = str(payload.get("token", ""))
+        except (TypeError, ValueError):
+            token = ""
+        session = auth.exchange_bootstrap(token)
+        if session is None:
+            return JSONResponse({"detail": "invalid or expired bootstrap token"}, status_code=401)
+        response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+        _set_session_cookie(response, session)
+        return response
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page() -> HTMLResponse:
+        if login_secret is None:
+            return HTMLResponse(
+                '<!doctype html><meta charset="utf-8"><title>Kalshi Bot</title>'
+                "<p>Start the dashboard from its launcher to open a new local session.</p>",
+                status_code=401,
+                headers={"Cache-Control": "no-store"},
+            )
+        return HTMLResponse(
+            '<!doctype html><meta charset="utf-8"><title>Kalshi Bot login</title>'
+            '<form method="post" action="/login"><label>Dashboard secret '
+            '<input name="secret" type="password" autofocus></label>'
+            '<button type="submit">Sign in</button></form>',
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/login")
+    async def login(request: Request) -> Response:
+        session = auth.login((await _form_fields(request)).get("secret", ""))
+        if session is None:
+            return HTMLResponse("Invalid dashboard secret", status_code=401)
+        response = RedirectResponse("/", status_code=303)
+        _set_session_cookie(response, session)
+        return response
+
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
         with session_factory() as session:
@@ -172,7 +303,7 @@ def create_app() -> FastAPI:
             )
             latest_trade_signal = next((s for s in signals if s.action != "HOLD"), None)
             context = {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "overview",
                 "control": panel.snapshot(),
                 "run": run,
@@ -198,7 +329,7 @@ def create_app() -> FastAPI:
         """
         with session_factory() as session:
             context = {
-                **_base_context(),
+                **_base_context(request),
                 "control": panel.snapshot(),
                 "readiness": _readiness(session),
                 "feeds": queries.capture_feeds(session),
@@ -210,7 +341,7 @@ def create_app() -> FastAPI:
     def data(request: Request) -> HTMLResponse:
         with session_factory() as session:
             context = {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "data",
                 "feeds": queries.capture_feeds(session),
                 "sampling": queries.sampling_quality(session),
@@ -220,11 +351,114 @@ def create_app() -> FastAPI:
             }
         return templates.TemplateResponse(request, "data.html", context)
 
+    def _progress_context(session) -> dict:
+        feeds = queries.capture_feeds(session)
+        sampling = queries.sampling_quality(session)
+        readiness = _readiness(session)
+        validation = queries.latest_validation_status(session)
+        backtest_runs = queries.recent_backtest_runs(session)
+        paper_runs = queries.paper_runs_overview(session)
+        jobs = operations.snapshot()
+        capture_snapshot = capture_process.snapshot()
+        paper_snapshot = paper_process.snapshot()
+        report = build_progress_report(
+            settings=settings,
+            root=Path.cwd(),
+            feeds=feeds,
+            sampling=sampling,
+            readiness=readiness,
+            validation=validation,
+            backtest_runs=backtest_runs,
+            paper_runs=paper_runs,
+            jobs=jobs,
+            capture_running=bool(capture_snapshot["running"]),
+        )
+        return {
+            "progress": report,
+            "feeds": feeds,
+            "sampling": sampling,
+            "readiness": readiness,
+            "validation": validation,
+            "backtest_runs": backtest_runs,
+            "paper_runs": paper_runs,
+            "operations": jobs,
+            "runtime": {
+                "capture": capture_snapshot,
+                "paper": paper_snapshot,
+                "fresh_feeds": sum(feed.status == "live" for feed in feeds),
+                "running_jobs": sum(job.status == "running" for job in jobs),
+            },
+        }
+
+    @app.get("/progress", response_class=HTMLResponse)
+    def progress_page(request: Request) -> HTMLResponse:
+        with session_factory() as session:
+            context = {
+                **_base_context(request),
+                "active_page": "progress",
+                **_progress_context(session),
+            }
+        return templates.TemplateResponse(request, "progress.html", context)
+
+    @app.get("/exports/progress.json")
+    def export_progress() -> JSONResponse:
+        """Download a redacted, point-in-time evidence bundle for review or support."""
+        with session_factory() as session:
+            state = _progress_context(session)
+            payload = {
+                "schema_version": "dashboard-progress-v1",
+                "generated_at": datetime.now(UTC).isoformat(),
+                "progress": report_as_dict(state["progress"]),
+                "feeds": [
+                    {
+                        **asdict(item),
+                        "status": item.status,
+                        "age_s": item.age_s,
+                        "span_hours": item.span_hours,
+                    }
+                    for item in state["feeds"]
+                ],
+                "sampling": asdict(state["sampling"]),
+                "readiness": asdict(state["readiness"]),
+                "validation": asdict(state["validation"]),
+                "backtest_runs": [
+                    {
+                        "id": run.id,
+                        "created_at": run.created_at,
+                        "strategy_name": run.strategy_name,
+                        "status": run.status,
+                        "evidence_class": run.evidence_class,
+                        "data_start_ts": run.data_start_ts,
+                        "data_end_ts": run.data_end_ts,
+                        "metrics_train": run.metrics_train,
+                        "metrics_test": run.metrics_test,
+                        "provenance": run.provenance,
+                    }
+                    for run in state["backtest_runs"]
+                ],
+                "paper_runs": [asdict(run) for run in state["paper_runs"]],
+                "test_jobs": [asdict(job) for job in state["operations"]],
+                "runtime": state["runtime"],
+                "notes": [
+                    "Secret-like fields are redacted recursively.",
+                    "The latest 100 dashboard jobs are retained across dashboard restarts.",
+                    "This is a summarized evidence bundle, not a raw database dump.",
+                ],
+            }
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return JSONResponse(
+            jsonable_encoder(redact_export(payload)),
+            headers={
+                "Content-Disposition": f'attachment; filename="kalshi-progress-{stamp}.json"',
+                "Cache-Control": "no-store",
+            },
+        )
+
     @app.get("/markets", response_class=HTMLResponse)
     def markets(request: Request) -> HTMLResponse:
         with session_factory() as session:
             context = {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "markets",
                 "areas": queries.market_areas(session),
                 "admissions": queries.asset_admissions(session),
@@ -243,9 +477,7 @@ def create_app() -> FastAPI:
         domain = area_domain[area_key]
         with session_factory() as session:
             area = next(item for item in queries.market_areas(session) if item.key == area_key)
-            admissions = [
-                a for a in queries.asset_admissions(session) if a.domain == domain
-            ]
+            admissions = [a for a in queries.asset_admissions(session) if a.domain == domain]
             paper_runs = queries.domain_paper_runs(session, domain)
             readiness_matrix = [
                 item for item in queries.papertrading_readiness(session) if item.domain == domain
@@ -253,14 +485,12 @@ def create_app() -> FastAPI:
             # Perpetuals section (strategy-lab-multi-account §7.1): open +
             # recently-closed perp positions with bracket, funding, and
             # distance to liquidation.
-            perp_positions = (
-                queries.perp_positions_view(session) if domain == "perp" else []
-            )
+            perp_positions = queries.perp_positions_view(session) if domain == "perp" else []
         return templates.TemplateResponse(
             request,
             "market_area.html",
             {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": area_key,
                 "area": area,
                 "admissions": admissions,
@@ -289,7 +519,7 @@ def create_app() -> FastAPI:
         gate status, PnL, and flat-sizing PnL together."""
         with session_factory() as session:
             context = {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "strategy-lab",
                 "comparison": queries.strategy_lab_comparison(session),
             }
@@ -301,16 +531,14 @@ def create_app() -> FastAPI:
             selected = run_id
             if selected is None:
                 latest = session.execute(
-                    select(CouncilRunRecord)
-                    .order_by(CouncilRunRecord.created_at.desc())
-                    .limit(1)
+                    select(CouncilRunRecord).order_by(CouncilRunRecord.created_at.desc()).limit(1)
                 ).scalar_one_or_none()
                 selected = latest.id if latest else None
             details = council_run_details(session, selected) if selected else None
         return templates.TemplateResponse(
             request,
             "council.html",
-            {**_base_context(), "active_page": "council", "details": details},
+            {**_base_context(request), "active_page": "council", "details": details},
         )
 
     @app.get("/runs", response_class=HTMLResponse)
@@ -320,7 +548,7 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request,
             "runs.html",
-            {**_base_context(), "active_page": "runs", "runs": all_runs},
+            {**_base_context(request), "active_page": "runs", "runs": all_runs},
         )
 
     @app.get("/operations", response_class=HTMLResponse)
@@ -329,11 +557,29 @@ def create_app() -> FastAPI:
             request,
             "operations.html",
             {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "operations",
                 "operations": operations.snapshot(),
                 "operation_names": tuple(COMMANDS),
                 "paper_process": paper_process.snapshot(),
+            },
+        )
+
+    @app.get("/operations/{job_id}/output")
+    def operation_output(job_id: str) -> PlainTextResponse:
+        job = operations.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="operator job not found")
+        body = (
+            f"job_id: {job.id}\nname: {job.name}\nstatus: {job.status}\n"
+            f"exit_code: {job.exit_code}\nstarted_at: {job.started_at}\n"
+            f"ended_at: {job.ended_at}\ncommand: {' '.join(job.command)}\n\n{job.output}"
+        )
+        return PlainTextResponse(
+            body,
+            headers={
+                "Content-Disposition": f'attachment; filename="{job.name}-{job.id}.txt"',
+                "Cache-Control": "no-store",
             },
         )
 
@@ -392,7 +638,7 @@ def create_app() -> FastAPI:
             request,
             "settings.html",
             {
-                **_base_context(),
+                **_base_context(request),
                 "active_page": "settings",
                 "colors": colors,
                 "presets": PRESETS,
@@ -405,11 +651,10 @@ def create_app() -> FastAPI:
 
     @app.post("/settings/theme/apply")
     async def apply_theme(request: Request) -> RedirectResponse:
-        form = await request.form()
+        form = await _form_fields(request)
         current = ThemeColors()
         overrides = {
-            name: str(form.get(name, default))
-            for name, default in current.as_dict().items()
+            name: str(form.get(name, default)) for name, default in current.as_dict().items()
         }
         with session_factory() as session:
             save_theme(session, ThemeColors(**overrides))

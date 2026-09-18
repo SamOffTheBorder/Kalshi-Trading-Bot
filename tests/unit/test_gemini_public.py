@@ -89,8 +89,6 @@ def test_fetch_trades_page_requires_symbol():
 
 
 def test_fetch_trade_pages_paginates_forward_and_stops_on_short_page():
-    import kalshi_bot.data.gemini_public as gp
-
     pages_returned = [
         [{"tid": i, "price": "1", "amount": "1", "timestampms": i} for i in range(500)],
         [{"tid": 500, "price": "1", "amount": "1", "timestampms": 500}],

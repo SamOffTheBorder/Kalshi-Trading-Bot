@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -49,6 +50,9 @@ COMMANDS: dict[str, tuple[str, ...]] = {
     "operate_help": ("uv", "run", "python", "scripts/operate.py", "--help"),
 }
 
+MAX_SAVED_JOBS = 100
+MAX_OUTPUT_CHARS = 1_000_000
+
 
 @dataclass
 class Operation:
@@ -67,6 +71,39 @@ class OperationManager:
     root: Path
     jobs: dict[str, Operation] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    history_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.history_path is None:
+            self.history_path = self.root / "data" / "dashboard_operations.json"
+        self._load()
+
+    def _load(self) -> None:
+        if self.history_path is None or not self.history_path.exists():
+            return
+        try:
+            payload = json.loads(self.history_path.read_text(encoding="utf-8"))
+            for raw in payload.get("jobs", []):
+                job = Operation(**raw)
+                # A dashboard restart means an in-memory worker cannot still be observed.
+                if job.status in {"queued", "running"}:
+                    job.status = "interrupted"
+                    job.ended_at = datetime.now(UTC).isoformat()
+                    job.output += "\nDashboard restarted before this job reported completion."
+                self.jobs[job.id] = job
+        except (OSError, TypeError, ValueError):
+            # A damaged history file must never prevent the operator UI from starting.
+            self.jobs = {}
+
+    def _save_locked(self) -> None:
+        if self.history_path is None:
+            return
+        self.history_path.parent.mkdir(parents=True, exist_ok=True)
+        recent = list(self.jobs.values())[-MAX_SAVED_JOBS:]
+        payload = {"schema_version": 1, "jobs": [asdict(job) for job in recent]}
+        temporary = self.history_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(self.history_path)
 
     def start(self, name: str) -> Operation:
         if name not in COMMANDS:
@@ -76,6 +113,7 @@ class OperationManager:
                 raise RuntimeError(f"{name} is already running")
             job = Operation(uuid.uuid4().hex[:12], name, COMMANDS[name])
             self.jobs[job.id] = job
+            self._save_locked()
         threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return job
 
@@ -83,23 +121,33 @@ class OperationManager:
         with self.lock:
             job.status = "running"
             job.started_at = datetime.now(UTC).isoformat()
+            self._save_locked()
         try:
             completed = subprocess.run(
                 job.command, cwd=self.root, capture_output=True, text=True, timeout=3600
             )
-            job.output = (completed.stdout + completed.stderr)[-20000:]
-            job.exit_code = completed.returncode
-            job.status = "passed" if completed.returncode == 0 else "failed"
+            output = (completed.stdout + completed.stderr)[-MAX_OUTPUT_CHARS:]
+            exit_code = completed.returncode
+            status = "passed" if completed.returncode == 0 else "failed"
         except Exception as exc:  # operator-visible failure, never an untracked crash
-            job.output = str(exc)
-            job.status = "failed"
-        finally:
-            with self.lock:
-                job.ended_at = datetime.now(UTC).isoformat()
+            output = str(exc)
+            exit_code = None
+            status = "failed"
+        with self.lock:
+            job.output = output
+            job.exit_code = exit_code
+            job.status = status
+            job.ended_at = datetime.now(UTC).isoformat()
+            self._save_locked()
 
     def snapshot(self) -> list[Operation]:
         with self.lock:
             return list(reversed(list(self.jobs.values())))
+
+    def get(self, job_id: str) -> Operation | None:
+        """Return one allowlisted job so its captured output can be downloaded."""
+        with self.lock:
+            return self.jobs.get(job_id)
 
 
 @dataclass

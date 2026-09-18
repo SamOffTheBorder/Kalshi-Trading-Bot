@@ -15,7 +15,7 @@ implementation does not build a status/header contract around a fiction, then
 have to retrofit it. See `design.md` §6a (authentication) and §8a
 (OPEN-5 heartbeat resolution) and `reconciliation.md` CONFLICT-1.
 
-- [ ] 1a.1 Implement whole-dashboard session authentication: HttpOnly/SameSite session cookie gating every route (bootstrap-token exchange and static assets excepted); single-use short-TTL bootstrap token issued at loopback launch and exchanged automatically so one-click startup needs no manual login; non-loopback bind continues to require `DASHBOARD_AUTH_SECRET` and uses it for session login; unauthenticated requests fail closed (redirect for navigations, 401 for fragments/polling) rendering no account data or controls; same-origin + per-session CSRF token required on every mutating route. Resolves `reconciliation.md` CONFLICT-1. See `design.md` §6a and `specs/trader-operations-workflow/spec.md` "Whole-dashboard session authentication".
+- [x] 1a.1 Implement whole-dashboard session authentication: HttpOnly/SameSite session cookie gating every route (bootstrap/login exchange and static assets excepted); single-use short-TTL bootstrap token issued at loopback launch in a URL fragment and exchanged automatically so one-click startup needs no manual login or token-bearing access-log URL; non-loopback bind requires both configured TLS and `DASHBOARD_AUTH_SECRET` and uses it for session login; unauthenticated requests fail closed (redirect for navigations, 401 for fragments/polling) rendering no account data or controls; same-origin + per-session CSRF token required on every mutating route. Resolves `reconciliation.md` CONFLICT-1. See `design.md` §6a and `specs/trader-operations-workflow/spec.md` "Whole-dashboard session authentication".
 - [ ] 1a.2 Add a durable runner heartbeat / process-status record (written by paper runner and capture processes on their own existing loop cadence, and by the dashboard's process handles where live) so a status model can distinguish "running row, dead process" from "running and healthy" across the process boundary, closing `audit.md` OPEN-5 and making externally started runners (CLI, prior dashboard instance) observable without a held process handle. See `design.md` §8a.
 
 ## 2. P0 — read contracts and durable state
@@ -116,7 +116,7 @@ audit/control/ledger, Claude Sonnet 5 for bounded presentation work) — the
 "GPT-6 Astra"/"GPT-5.6 Terra" references in this file and `design.md` are not
 applicable to the session executing this change.
 
-**Next task is 1a.1 (authentication), then 1a.2 (runner heartbeat), then the
+**Task 1a.1 is complete. Next task is 1a.2 (runner heartbeat), then the
 original 2.1-2.5.** Not task 1.1 — that section is done. Resume using
 `openspec status --change trader-dashboard-experience --json` to confirm
 checkbox state, then `audit.md` and `reconciliation.md` for the findings

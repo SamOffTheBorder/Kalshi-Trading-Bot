@@ -45,6 +45,7 @@ from kalshi_bot.backtest.engine import BacktestEngine
 from kalshi_bot.backtest.promotion_gate import PromotionPolicy, evaluate_promotion
 from kalshi_bot.backtest.report import (
     AggregateReport,
+    ComponentGateResult,
     FoldReport,
     aggregate_reports,
     build_fold_report,
@@ -55,6 +56,10 @@ from kalshi_bot.risk.drawdown_guard import DrawdownGuard
 from kalshi_bot.risk.fixed_risk import FixedRiskConfig
 from kalshi_bot.storage.models import BRTIObservation, Candle, KalshiMarket
 from kalshi_bot.strategy.base import Action, Decision, StrategyContext, StrategyProtocol
+from kalshi_bot.strategy.mean_reversion import (
+    MeanReversionConfig,
+    MeanReversionSettlementStrategy,
+)
 from kalshi_bot.strategy.settlement_prob import (
     Calibrator,
     IdentityCalibrator,
@@ -106,10 +111,15 @@ def _trend_control_arm(calibrator: Calibrator) -> StrategyProtocol:
     )
 
 
+def _mean_reversion_arm(calibrator: Calibrator) -> StrategyProtocol:
+    return MeanReversionSettlementStrategy(MeanReversionConfig(), calibrator=calibrator)
+
+
 ARMS: tuple[ArmSpec, ...] = (
     ArmSpec("settlement_probability", _settlement_arm),
     ArmSpec("trend_drift", _trend_drift_arm),
     ArmSpec("trend_control", _trend_control_arm),
+    ArmSpec("mean_reversion", _mean_reversion_arm),
 )
 
 
@@ -149,14 +159,20 @@ def _data_bounds(session: Session) -> tuple[int, int] | None:
 
 
 def dataset_counts(session: Session) -> dict[str, int]:
-    markets = session.scalar(
-        select(func.count()).select_from(KalshiMarket).where(
-            KalshiMarket.series_ticker == SERIES
+    markets = (
+        session.scalar(
+            select(func.count())
+            .select_from(KalshiMarket)
+            .where(KalshiMarket.series_ticker == SERIES)
         )
-    ) or 0
-    candles = session.scalar(
-        select(func.count()).select_from(Candle).where(Candle.series_ticker == SERIES)
-    ) or 0
+        or 0
+    )
+    candles = (
+        session.scalar(
+            select(func.count()).select_from(Candle).where(Candle.series_ticker == SERIES)
+        )
+        or 0
+    )
     brti = session.scalar(select(func.count()).select_from(BRTIObservation)) or 0
     return {"markets": int(markets), "candles": int(candles), "brti": int(brti)}
 
@@ -166,7 +182,9 @@ def _candidate_count(session: Session, fold: WalkForwardFold) -> int:
     for the fold's coverage (trades / candidates)."""
     return int(
         session.scalar(
-            select(func.count()).select_from(KalshiMarket).where(
+            select(func.count())
+            .select_from(KalshiMarket)
+            .where(
                 KalshiMarket.series_ticker == SERIES,
                 KalshiMarket.result.is_not(None),
                 KalshiMarket.result != "",
@@ -207,9 +225,7 @@ def _run_one_fold(
             starting_cash_usd=starting_cash_usd,
             kelly_fraction=1.0,  # unused: fixed-risk mode
             max_position_pct=fixed_risk_config.max_position_pct,
-            guard=DrawdownGuard(
-                pause_pct=0.25, halt_pct=0.40, initial_equity=starting_cash_usd
-            ),
+            guard=DrawdownGuard(pause_pct=0.25, halt_pct=0.40, initial_equity=starting_cash_usd),
             throttle=None,
             candle_period_minutes=1,
             sizing_mode="fixed_risk",
@@ -324,12 +340,49 @@ def run_arm(
 
     result = run_walkforward(folds, evaluator_factory)
     reports = [r for r in result.reports if isinstance(r, FoldReport)]
-    aggregate = aggregate_reports(reports, evidence_class="validation")
+    aggregate = aggregate_reports(
+        reports,
+        evidence_class="validation",
+        component_gates=(_component_gate(reports, policy),),
+    )
     decision = evaluate_promotion(aggregate, policy)
     payload = aggregate.to_dict()
     payload["promotion_status"] = "passed" if decision.passed else "failed"
     payload["promotion_reasons"] = list(decision.reasons)
     return payload
+
+
+def _component_gate(reports: Sequence[FoldReport], policy: PromotionPolicy) -> ComponentGateResult:
+    """Make this asset/cadence an explicit, independently failing component.
+
+    The current runner is intentionally scoped to BTC / KXBTC15M.  Keeping
+    that scope explicit prevents a later multi-asset aggregate from masking a
+    failed cadence, and makes the present one-component verdict honest.
+    """
+    n_trades = sum(report.n_trades for report in reports)
+    economics_ok = bool(reports) and all(
+        report.expectancy_usd is not None and report.expectancy_usd > 0 for report in reports
+    )
+    risk_ok = bool(reports) and all(
+        report.expectancy_ci is not None and report.expectancy_ci[0] > 0 for report in reports
+    )
+    data_ok = len(reports) >= policy.min_folds and all(report.n_trades > 0 for report in reports)
+    reasons: list[str] = []
+    if not data_ok:
+        reasons.append("component_data_or_fold_coverage_failed")
+    if not economics_ok:
+        reasons.append("component_fold_expectancy_failed")
+    if not risk_ok:
+        reasons.append("component_fold_confidence_failed")
+    return ComponentGateResult(
+        component_id="BTC:KXBTC15M",
+        sample_count=n_trades,
+        min_samples=policy.min_trades,
+        data_ok=data_ok,
+        economics_ok=economics_ok,
+        risk_ok=risk_ok,
+        reasons=tuple(reasons),
+    )
 
 
 def run_validation_arms(
@@ -411,6 +464,10 @@ def run_validation_arms(
         for a in ARMS
     }
     incremental = _incremental_trend_value(arms)
+    mean_reversion_incremental = _incremental_arm_value(
+        arms.get("mean_reversion"), arms.get("settlement_probability")
+    )
+    _enforce_incremental_fold_requirement(arms, mean_reversion_incremental)
     any_pass = any(arm.get("promotion_status") == "passed" for arm in arms.values())
     return {
         "instrument": SERIES,
@@ -427,6 +484,7 @@ def run_validation_arms(
         "fee_config_version": fixed_risk_config.version,
         "arms": arms,
         "incremental_trend_vs_control": incremental,
+        "incremental_mean_reversion_vs_baseline": mean_reversion_incremental,
         "verdict": "PASS" if any_pass else "FAIL",
     }
 
@@ -448,6 +506,74 @@ def _incremental_trend_value(arms: dict[str, dict[str, object]]) -> dict[str, ob
         "control_net_pnl_usd": float(c_pnl),
         "incremental_net_pnl_usd": float(d_pnl) - float(c_pnl),
     }
+
+
+def _incremental_arm_value(
+    candidate: dict[str, object] | None,
+    baseline: dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Compare matching candidate and baseline folds after all modeled costs."""
+    if candidate is None or baseline is None:
+        return None
+    candidate_folds = candidate.get("folds")
+    baseline_folds = baseline.get("folds")
+    if not isinstance(candidate_folds, (list, tuple)) or not isinstance(
+        baseline_folds, (list, tuple)
+    ):
+        return None
+    baseline_by_index = {
+        int(fold["fold_index"]): fold for fold in baseline_folds if isinstance(fold, dict)
+    }
+    comparisons: list[dict[str, float | int]] = []
+    for fold in candidate_folds:
+        if not isinstance(fold, dict):
+            continue
+        fold_index = int(fold["fold_index"])
+        baseline_fold = baseline_by_index.get(fold_index)
+        if baseline_fold is None:
+            continue
+        candidate_net = float(fold["net_pnl_usd"])
+        baseline_net = float(baseline_fold["net_pnl_usd"])
+        comparisons.append(
+            {
+                "fold_index": fold_index,
+                "candidate_net_pnl_usd": candidate_net,
+                "baseline_net_pnl_usd": baseline_net,
+                "incremental_net_pnl_usd": candidate_net - baseline_net,
+            }
+        )
+    if not comparisons:
+        return None
+    fully_matched = len(comparisons) == len(candidate_folds) == len(baseline_folds)
+    return {
+        "candidate": "mean_reversion",
+        "baseline": "settlement_probability",
+        "folds": comparisons,
+        "all_folds_positive": fully_matched
+        and all(item["incremental_net_pnl_usd"] > 0 for item in comparisons),
+        "all_folds_matched": fully_matched,
+        "incremental_net_pnl_usd": sum(item["incremental_net_pnl_usd"] for item in comparisons),
+    }
+
+
+def _enforce_incremental_fold_requirement(
+    arms: dict[str, dict[str, object]], incremental: dict[str, object] | None
+) -> None:
+    """Fail mean reversion when it does not improve every OOS fold.
+
+    This requirement is intentionally stricter than an aggregate comparison:
+    one lucky event cluster cannot rescue a candidate that loses incremental
+    value in another independent chronological fold.
+    """
+    candidate = arms.get("mean_reversion")
+    if candidate is None:
+        return
+    if incremental is None or not bool(incremental.get("all_folds_positive")):
+        candidate["promotion_status"] = "failed"
+        stored_reasons = candidate.get("promotion_reasons")
+        reasons = list(stored_reasons) if isinstance(stored_reasons, (list, tuple)) else []
+        reasons.append("incremental_value_not_positive_in_every_fold")
+        candidate["promotion_reasons"] = reasons
 
 
 def _empty_arm_payload(reason: str) -> dict[str, object]:

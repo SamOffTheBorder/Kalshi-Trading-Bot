@@ -62,8 +62,13 @@ def test_validation_run_surfaces_scope_versions_and_promotion(session):
 def test_prefers_a_validation_run_over_a_newer_diagnostic_one(session):
     session.add(
         BacktestRun(
-            strategy_name="settlement_prob", params={}, data_start_ts=1, data_end_ts=2,
-            split_ts=1, status="completed", evidence_class="validation",
+            strategy_name="settlement_prob",
+            params={},
+            data_start_ts=1,
+            data_end_ts=2,
+            split_ts=1,
+            status="completed",
+            evidence_class="validation",
             provenance={"series": "KXBTC15M"},
             metrics_test={"promotion": {"passed": True, "reasons": []}},
         )
@@ -71,8 +76,13 @@ def test_prefers_a_validation_run_over_a_newer_diagnostic_one(session):
     session.commit()
     session.add(
         BacktestRun(
-            strategy_name="crypto_mispricing", params={}, data_start_ts=3, data_end_ts=4,
-            split_ts=3, status="completed", evidence_class="diagnostic",
+            strategy_name="crypto_mispricing",
+            params={},
+            data_start_ts=3,
+            data_end_ts=4,
+            split_ts=3,
+            status="completed",
+            evidence_class="diagnostic",
         )
     )
     session.commit()
@@ -85,8 +95,13 @@ def test_prefers_a_validation_run_over_a_newer_diagnostic_one(session):
 def test_diagnostic_only_db_still_reports_that_run_as_not_evaluated(session):
     session.add(
         BacktestRun(
-            strategy_name="crypto_mispricing", params={}, data_start_ts=1, data_end_ts=2,
-            split_ts=1, status="completed", evidence_class="diagnostic",
+            strategy_name="crypto_mispricing",
+            params={},
+            data_start_ts=1,
+            data_end_ts=2,
+            split_ts=1,
+            status="completed",
+            evidence_class="diagnostic",
         )
     )
     session.commit()
@@ -112,7 +127,13 @@ def test_index_route_renders_the_validation_panel(monkeypatch, tmp_path):
     # failure in the full suite).
     settings_mod.get_settings.cache_clear()
     try:
-        client = TestClient(create_app())
+        client = TestClient(create_app(bootstrap_token="validation-panel-bootstrap"))
+        assert (
+            client.post(
+                "/_auth/bootstrap", json={"token": "validation-panel-bootstrap"}
+            ).status_code
+            == 204
+        )
         resp = client.get("/")
     finally:
         settings_mod.get_settings.cache_clear()

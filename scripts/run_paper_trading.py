@@ -41,6 +41,7 @@ scheduler, no service, no unattended process. Ctrl+C stops it cleanly.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -57,6 +58,7 @@ from kalshi_bot.data.brti.kalshi_source import KalshiBRTISource  # noqa: E402
 from kalshi_bot.data.brti.poll import BRTIReadingRaw  # noqa: E402
 from kalshi_bot.data.kalshi.client import KalshiPublicClient  # noqa: E402
 from kalshi_bot.execution.broker_protocol import MarketSnapshot, OrderRequest  # noqa: E402
+from kalshi_bot.execution.heartbeat import record_heartbeat  # noqa: E402
 from kalshi_bot.execution.paper_broker import PaperBroker  # noqa: E402
 from kalshi_bot.execution.paper_guard import PaperExecutionGuard  # noqa: E402
 from kalshi_bot.risk.daily_loss_guard import ConsecutiveLossGuard, DailyLossGuard  # noqa: E402
@@ -164,6 +166,7 @@ def run(
     brti_history: list[BRTIReading] = []
 
     start = now_fn()
+    runner_id = f"legacy-paper:{os.getpid()}"
     last_market_poll = 0.0
     last_brti_poll = 0.0
     seen_tickers: set[str] = set(broker.open_position_tickers())
@@ -181,6 +184,13 @@ def run(
     try:
         while True:
             now = now_fn()
+            record_heartbeat(
+                session,
+                runner_id=runner_id,
+                process_kind="paper_runner",
+                pid=os.getpid(),
+                observed_at=int(now),
+            )
             if duration_s is not None and now - start >= duration_s:
                 logger.info("Paper trading loop: duration elapsed, stopping.")
                 break
@@ -217,6 +227,14 @@ def run(
     except KeyboardInterrupt:
         logger.info("Paper trading loop: interrupted, shutting down cleanly.")
     finally:
+        record_heartbeat(
+            session,
+            runner_id=runner_id,
+            process_kind="paper_runner",
+            pid=os.getpid(),
+            status="stopped",
+            observed_at=int(now_fn()),
+        )
         session.commit()
         public_client.close()
         brti_source.close()

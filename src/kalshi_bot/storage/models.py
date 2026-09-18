@@ -488,9 +488,7 @@ class ReconstructedIndexObservation(Base):
 
     __tablename__ = "reconstructed_index_observations"
     __table_args__ = (
-        UniqueConstraint(
-            "target_index", "observed_at", name="uq_reconstructed_index_observed_at"
-        ),
+        UniqueConstraint("target_index", "observed_at", name="uq_reconstructed_index_observed_at"),
         Index("ix_reconstructed_index_observed_at", "target_index", "observed_at"),
     )
 
@@ -557,6 +555,22 @@ class PaperAuditEvent(Base):
     payload: Mapped[dict | None] = mapped_column(JSON)
 
 
+class RunnerHeartbeat(Base):
+    """Latest durable liveness evidence emitted by a foreground process."""
+
+    __tablename__ = "runner_heartbeats"
+    __table_args__ = (Index("ix_runner_heartbeats_observed", "observed_at"),)
+
+    runner_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    paper_run_id: Mapped[str | None] = mapped_column(ForeignKey("paper_runs.id"))
+    process_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    pid: Mapped[int | None] = mapped_column(Integer)
+    host: Mapped[str] = mapped_column(String(128), nullable=False)
+    observed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    available_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+
+
 class CouncilRunRecord(Base):
     """One immutable candidate review and its evidence/policy lineage."""
 
@@ -602,9 +616,7 @@ class AgentDefinitionSnapshotRecord(Base):
     """Versioned role/provider/card permissions captured for one council run."""
 
     __tablename__ = "council_agent_definitions"
-    __table_args__ = (
-        Index("ix_council_agent_defs_run_role", "council_run_id", "role"),
-    )
+    __table_args__ = (Index("ix_council_agent_defs_run_role", "council_run_id", "role"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     council_run_id: Mapped[str] = mapped_column(ForeignKey("council_runs.id"), nullable=False)

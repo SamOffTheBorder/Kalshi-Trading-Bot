@@ -252,7 +252,12 @@ def client(tmp_path, monkeypatch):
     settings_mod.get_settings.cache_clear()
     from kalshi_bot.web.app import create_app
 
-    yield TestClient(create_app())
+    client = TestClient(create_app(bootstrap_token="capture-panel-bootstrap"))
+    assert (
+        client.post("/_auth/bootstrap", json={"token": "capture-panel-bootstrap"}).status_code
+        == 204
+    )
+    yield client
     settings_mod.get_settings.cache_clear()
 
 
@@ -294,9 +299,23 @@ def test_overview_and_areas_show_paper_run_health_panels(client):
 
 
 def test_controls_redirect_and_toggle_state(client):
-    assert client.post("/control/kill", follow_redirects=False).status_code == 303
+    import re
+
+    csrf_token = re.search(r'name="csrf_token" value="([^"]+)"', client.get("/").text).group(1)
+    headers = {"Origin": "http://testserver"}
+    assert (
+        client.post(
+            "/control/kill",
+            data={"csrf_token": csrf_token},
+            headers=headers,
+            follow_redirects=False,
+        ).status_code
+        == 303
+    )
     assert "STOPPED" in client.get("/").text
-    client.post("/control/arm", follow_redirects=False)
+    client.post(
+        "/control/arm", data={"csrf_token": csrf_token}, headers=headers, follow_redirects=False
+    )
     assert "ARMED" in client.get("/").text
 
 
@@ -304,7 +323,7 @@ def test_dashboard_has_no_external_script_dependency(client):
     """The kill switch must not depend on a CDN or external build artifact."""
     body = client.get("/").text
     assert "unpkg.com" not in body
-    assert '/static/live.js' in body
+    assert "/static/live.js" in body
 
 
 def test_overview_exposes_read_only_live_status_fragment(client):

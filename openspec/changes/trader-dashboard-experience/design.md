@@ -141,9 +141,18 @@ Read-only pages carry the same risk of disclosing account state, positions,
 and P&L as a control action, so scoping auth to POST routes only would leave
 every GET route — including the ones this change adds — unauthenticated.
 
-- **Session cookie.** Opaque, server-generated session token, HttpOnly,
-  `Secure` when the connection is TLS (never on plain-HTTP loopback, since
-  `Secure` would silently break the cookie there), `SameSite=Lax`, no
+- **Transport and session cookie.** Loopback may use plain HTTP so the local
+  launcher remains one click; its cookie is therefore HttpOnly and
+  `SameSite=Lax` but not `Secure`. A non-loopback bind SHALL require TLS as
+  well as `DASHBOARD_AUTH_SECRET`; it refuses to start if a certificate/key is
+  not configured, and its opaque, server-generated session cookie is HttpOnly,
+  `Secure`, and `SameSite=Lax`. No secret or authenticated cookie is ever sent
+  over a non-loopback plain-HTTP connection. Session tokens carry no embedded
+  claims and are validated against a small server-side session store (in-memory
+  is acceptable for a single local operator process; do not add a new
+  persistent table unless session survival across a dashboard restart is
+  explicitly wanted, which it is not by default. A restart requiring one new
+  bootstrap redirect is the intended and simpler behavior).
   client-readable value, no embedded claims — validated against a small
   server-side session store (in-memory is acceptable for a single local
   operator process; do not add a new persistent table unless session
@@ -154,11 +163,12 @@ every GET route — including the ones this change adds — unauthenticated.
   two ways:
   1. **Loopback one-click startup (default).** `scripts/start_dashboard.py`
      generates a random, single-use bootstrap token at process start,
-     includes it as a query parameter on the URL it auto-opens in the
-     browser (e.g. `http://127.0.0.1:8765/?bootstrap=<token>`), and the
-     dashboard's root handler exchanges a valid, unused bootstrap token for
-     a session cookie via a redirect to the bare URL (so the token never
-     sits in browser history past that first load). The token is invalidated
+     includes it only in a URL fragment on a no-data bootstrap page (e.g.
+     `http://127.0.0.1:8765/_auth/bootstrap#<token>`). A local static script
+     reads the fragment and POSTs it to the exchange endpoint, then replaces
+     the location with `/`; fragments are not sent in HTTP requests or normal
+     access logs. The bootstrap page and exchange response use `no-store` and
+     `Referrer-Policy: no-referrer`. The token is invalidated
      after first use and after a short TTL (a few minutes), whichever comes
      first, so a stale terminal scrollback or shared screen does not leave a
      standing credential. This preserves one-click startup exactly: the
@@ -170,11 +180,11 @@ every GET route — including the ones this change adds — unauthenticated.
      login for non-loopback access: a `/login` form (or equivalent) accepts
      the configured secret and, on match, issues the same session cookie.
      Constant-time comparison; no secret echoed in logs or error text.
-- **Which routes require authentication.** All of them, with two narrow
-  exceptions: the bootstrap-token exchange route itself (it establishes the
-  session, so it cannot require one) and static asset paths (CSS/JS/icons
-  with no account data). Every page route, every fragment/polling endpoint,
-  and every mutation route requires a valid session. This is stricter than
+- **Which routes require authentication.** All routes carrying dashboard data
+  require authentication. The only exceptions are the no-data bootstrap and
+  login establishment endpoints, and static asset paths (CSS/JS/icons with no
+  account data). Every dashboard page route, fragment/polling endpoint, and
+  mutation route requires a valid session. This is stricter than
   "mutations only" by design — see above.
 - **Missing-secret / no-session behavior.** A request without a valid
   session cookie receives a redirect to the bootstrap/login flow for
@@ -402,12 +412,12 @@ sequence before further implementation:
   work, Claude Sonnet 5 for bounded presentation work once contracts are
   fixed, per this document's own escalation rule.
 
-No implementation or runtime verification has been performed beyond the P0
-audit's fixtures (`tests/unit/conftest_dashboard_states.py`,
-`tests/unit/test_dashboard_state_fixtures.py`) and the regression baseline
-recorded in `audit.md` §4.1 (986 passed / 0 failed before, 999 passed / 0
-failed after the audit's own additions). Resume with `openspec status
---change trader-dashboard-experience --json`; the next task is the revised
-P0 sequence in `tasks.md` (authentication, runner heartbeat, then the
-original 2.1-2.5, 3.1-3.5), not task 1.1. Preserve completed artifacts.
+Task 1a.1 was implemented and verified on 2026-09-14: the dashboard now uses
+fragment-only loopback bootstrap exchange, authenticated sessions, CSRF and
+same-origin mutation checks, and TLS-gated non-loopback startup. The full suite
+passed with 1003 passing tests, 3 deselected and one pre-existing third-party
+deprecation warning. Resume with `openspec status
+--change trader-dashboard-experience --json`; the next task is runner
+heartbeat (1a.2), followed by the original 2.1-2.5 and 3.1-3.5. Preserve
+completed artifacts.
 Final readiness and verification are recorded in `handoff.md`.

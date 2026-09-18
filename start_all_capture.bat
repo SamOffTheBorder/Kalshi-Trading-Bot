@@ -37,6 +37,9 @@ REM      microprice experiment -- strategy/experiments.py)
 REM    * KXBTC15M public trades for ~3h (unauthenticated, feeds the
 REM      public_trade_imbalance experiment)
 REM    * current funding estimates (one snapshot; not backfillable)
+REM    * KXBTC15M validation report after each completed capture cycle. A
+REM      NO-GO is expected until the archive has the full walk-forward window;
+REM      it is reported and the foreground capture loop continues.
 REM
 REM  The BRTI/perp-mark windows are the long pole: Kalshi publishes no history
 REM  for them, so the only way to reach the ~90 day validation target is wall
@@ -161,6 +164,13 @@ uv run python scripts\capture_session.py --capture-funding-estimates --perp-asse
 echo.
 echo === %DATE% %TIME%  cycle done -- gap report ===
 uv run python scripts\capture_session.py --report
+
+echo.
+echo === %DATE% %TIME%  KXBTC15M validation report ===
+REM run_validation exits 1 for a valid NO-GO as well as an operational error.
+REM Capture must continue in either case; inspect the printed report for the
+REM explicit verdict and data-availability reason.
+uv run python scripts\run_validation.py --db data\kalshi_bot.db || echo *** validation is currently NO-GO or failed; continuing capture ***
 
 REM advance the lookback window for the next cycle
 for /f %%T in ('powershell -NoProfile -Command "[int][double]::Parse((Get-Date -UFormat %%s))"') do set NOW=%%T

@@ -3,13 +3,15 @@
 ### Requirement: Whole-dashboard session authentication
 
 Every dashboard route SHALL require a valid authenticated session, established
-via an HttpOnly, `SameSite` session cookie, with two narrow exceptions: the
-bootstrap-token exchange route itself and static assets carrying no account
-data. Loopback one-click startup SHALL establish a session automatically via a
+via an HttpOnly, `SameSite` session cookie. Only no-data bootstrap/login session
+establishment endpoints and static assets carrying no account data are exempt.
+Loopback one-click startup SHALL establish a session automatically via a
 single-use, short-TTL bootstrap token issued at launch and exchanged for a
 session cookie on first load, without requiring a manual login step. A
-non-loopback bind SHALL continue to require `DASHBOARD_AUTH_SECRET` at launch
-and SHALL additionally require it to establish a session. A request without a
+non-loopback bind SHALL require both `DASHBOARD_AUTH_SECRET` and configured TLS
+at launch and SHALL additionally require the secret to establish a session. A
+loopback bootstrap token SHALL be conveyed in a URL fragment and exchanged by
+POST so it is absent from HTTP request URLs and normal access logs. A request without a
 valid session SHALL render no account data and no control, including the halt
 control, and SHALL fail closed rather than expose a partially-authenticated
 view. Every mutating route SHALL additionally require a same-origin check and
@@ -17,7 +19,11 @@ a per-session CSRF token verified before any control logic runs.
 
 #### Scenario: One-click startup remains one click
 - **WHEN** the operator launches the dashboard via the existing batch launcher on loopback
-- **THEN** the auto-opened browser lands in an authenticated session with no separate login step, and the bootstrap token is invalidated after first use
+- **THEN** the auto-opened browser lands in an authenticated session with no separate login step, the bootstrap token is invalidated after first use, and the token is absent from the HTTP request URL and access log
+
+#### Scenario: Non-loopback transport is incomplete
+- **WHEN** an operator requests a non-loopback bind with a dashboard secret but without configured TLS
+- **THEN** startup refuses before serving any dashboard route or accepting the secret over plain HTTP
 
 #### Scenario: Unauthenticated request is refused, not partially rendered
 - **WHEN** a request arrives with no valid session cookie
@@ -79,4 +85,3 @@ Alerts SHALL record severity, affected scope, first/last seen, source identity, 
 ## Model complexity
 
 High-complexity cross-capability contract. Follow the model allocation and escalation rules in `../../design.md`: GPT-6 Astra for requirements and control/accounting review; Claude Opus 5 is an advisory user-selected alternative. Bounded presentation work can use the documented lighter allocation only after contracts are fixed. Revisit when data coverage or execution dependencies change.
-

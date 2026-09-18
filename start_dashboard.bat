@@ -9,9 +9,8 @@ REM  Read-only and safe: opening this dashboard NEVER starts trading. Trading
 REM  always starts stopped, and no live-trading process exists yet in any case
 REM  -- the Start button records operator intent only.
 REM
-REM  Binds to 127.0.0.1 (this machine only). Exposing it to the network
-REM  requires DASHBOARD_AUTH_SECRET, since nothing here implements request
-REM  auth yet.
+REM  Binds to 127.0.0.1 (this machine only) and opens a one-time authenticated
+REM  browser session. Network access requires DASHBOARD_AUTH_SECRET and TLS.
 REM
 REM  Pages:
 REM    Overview       trading control, validation readiness, capture health,
@@ -26,7 +25,7 @@ title Kalshi Bot Dashboard
 echo.
 echo   Kalshi Bot Dashboard
 echo   --------------------
-echo   Starting on http://127.0.0.1:8765/ (opens in your browser).
+echo   Starting dashboard (opens in your browser).
 echo   Trading starts STOPPED. Close this window to shut down.
 echo.
 

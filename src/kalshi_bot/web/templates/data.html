@@ -9,8 +9,8 @@
     from the newest observation, so a dead capture window shows here within minutes.
   </p>
   <div class="controls" style="margin-bottom:14px">
-    <form method="post" action="/operations/capture/start"><button class="btn btn-start" type="submit" {% if capture_process.running %}disabled{% endif %}>Start all capture feeds</button></form>
-    <form method="post" action="/operations/capture/stop"><button class="btn btn-kill" type="submit" {% if not capture_process.running %}disabled{% endif %}>Stop capture feeds</button></form>
+    <form method="post" action="/operations/capture/start"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-start" type="submit" {% if capture_process.running %}disabled{% endif %}>Start all capture feeds</button></form>
+    <form method="post" action="/operations/capture/stop"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-kill" type="submit" {% if not capture_process.running %}disabled{% endif %}>Stop capture feeds</button></form>
     <span class="badge {% if capture_process.running %}badge-ok{% else %}badge-idle{% endif %}">{{ "running" if capture_process.running else "stopped" }}</span>
   </div>
   <div class="table-scroll">

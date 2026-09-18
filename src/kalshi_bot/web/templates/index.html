@@ -20,6 +20,7 @@
       {#  Plain form POSTs, not htmx: the kill switch must work with no
           network and no scripting. #}
       <form method="post" action="/control/arm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="btn btn-start" type="submit"
                 {% if not readiness.is_ready %}disabled
                 title="Validation gate has not passed — see Validation readiness below"{% endif %}>
@@ -27,6 +28,7 @@
         </button>
       </form>
       <form method="post" action="/control/kill">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button class="btn btn-kill" type="submit">KILL SWITCH</button>
       </form>
     </div>

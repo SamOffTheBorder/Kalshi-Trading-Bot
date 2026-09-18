@@ -164,7 +164,12 @@ def test_full_run_over_synthetic_archive_exercises_every_arm(session_factory):
     assert result["instrument"] == "KXBTC15M"
     assert result["window"]["folds"] >= 3
     arms = result["arms"]
-    assert set(arms) == {"settlement_probability", "trend_drift", "trend_control"}
+    assert set(arms) == {
+        "settlement_probability",
+        "trend_drift",
+        "trend_control",
+        "mean_reversion",
+    }
 
     settlement = arms["settlement_probability"]
     # The favourable synthetic archive must produce trades and fold reports.
@@ -180,6 +185,20 @@ def test_full_run_over_synthetic_archive_exercises_every_arm(session_factory):
     incr = result["incremental_trend_vs_control"]
     assert incr is not None
     assert "incremental_net_pnl_usd" in incr
+
+    mean_reversion = result["incremental_mean_reversion_vs_baseline"]
+    assert mean_reversion is not None
+    assert len(mean_reversion["folds"]) >= 3
+    assert "all_folds_positive" in mean_reversion
+    assert mean_reversion["all_folds_matched"] is True
+    # This intentionally trend-dominated synthetic archive is not evidence
+    # for fading a move. The candidate must be rejected rather than saved by
+    # aggregate results from another arm or a single lucky fold.
+    assert arms["mean_reversion"]["promotion_status"] == "failed"
+    assert (
+        "incremental_value_not_positive_in_every_fold"
+        in arms["mean_reversion"]["promotion_reasons"]
+    )
 
 
 def test_calibration_accumulates_across_folds_only_forward(session_factory):
