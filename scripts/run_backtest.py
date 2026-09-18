@@ -89,7 +89,7 @@ async def main() -> None:
 
     cash = args.cash
     if cash is None:
-        cash = settings.bankroll_total_usd * settings.bankroll_split_kalshi_pct
+        cash = settings.bankroll_total_usd
 
     strategy = CryptoMispricingStrategy(
         CryptoMispricingConfig(

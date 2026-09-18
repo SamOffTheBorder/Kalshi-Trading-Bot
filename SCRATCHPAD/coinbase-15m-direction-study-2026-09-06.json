@@ -1,0 +1,35 @@
+{
+  "completed_bars": 2880,
+  "continuation": {
+    "accuracy": 0.48957609451007644,
+    "signal": false,
+    "trades": 2878,
+    "two_sided_binomial_p": 0.27142420433115166,
+    "wilson_95_ci": [
+      0.47133856618203207,
+      0.5078414137308127
+    ],
+    "wins": 1409
+  },
+  "days_requested": 30,
+  "gap_pairs_excluded": 0,
+  "limitations": [
+    "Coinbase close direction is a proxy; Kalshi settles on CF Benchmarks RTI averages.",
+    "No Kalshi quote, fill, fee, adverse-selection, or BRTI data is included.",
+    "A positive result is not promotion evidence and must clear the causal promotion gate separately."
+  ],
+  "reversal": {
+    "accuracy": 0.5104239054899236,
+    "signal": false,
+    "trades": 2878,
+    "two_sided_binomial_p": 0.27142420433115166,
+    "wilson_95_ci": [
+      0.49215858626918735,
+      0.5286614338179679
+    ],
+    "wins": 1469
+  },
+  "source": "Coinbase Exchange",
+  "symbol": "BTC-USD",
+  "verdict": "no_statistically_clear_directional_signal"
+}

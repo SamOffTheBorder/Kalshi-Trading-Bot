@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
+from kalshi_bot.signals.settlement_window import BRTIReading
+from kalshi_bot.strategy.levels import SpotBar
+from kalshi_bot.strategy.underlying_features import UnderlyingFeatures
+
 
 class Action(StrEnum):
     BUY_YES = "BUY_YES"
@@ -49,8 +53,27 @@ class StrategyContext:
     # None = not computable (insufficient spot history) -> no trend gate applied.
     trend_zscore: float | None = None
 
+    # Recent underlying spot OHLCV bars, oldest first (tasks.md 6.1/6.2): the
+    # trend/level strategies detect swing highs/lows and VWAP from this
+    # series (strategy/levels.py). Empty for strategies that don't need bar
+    # history (e.g. crypto_mispricing, which only looks at `spot`/`vol_annual`).
+    spot_bars: tuple[SpotBar, ...] = field(default_factory=tuple)
+
+    # Timestamped BRTI index readings covering (at least) this window's open
+    # 60 s averaging period through `now_ts`, oldest first, filtered by the
+    # caller to only those usable at/<= `now_ts` (kxbtc15m-validation-rebuild
+    # §4.1/§4.2). The settlement-aware strategy builds its
+    # SettlementWindowFeatures from this; empty for strategies that don't use
+    # BRTI (all the pre-§4 ones).
+    brti_readings: tuple[BRTIReading, ...] = field(default_factory=tuple)
+
     # room for later signal inputs (sentiment, forecasts) without breaking the protocol
     extras: dict[str, float] = field(default_factory=dict)
+
+    # Optional external spot/perpetual feature snapshots. The caller owns
+    # source alignment and causal filtering; a prediction backtest may elect
+    # to fail closed when a supplied snapshot is not explicitly aligned.
+    underlying_features: tuple[UnderlyingFeatures, ...] = field(default_factory=tuple)
 
     @property
     def t_years(self) -> float:
@@ -70,6 +93,15 @@ class Decision:
     market_ticker: str
     strategy_name: str
 
+    # P(this decision's own side wins) — side-consistent, in [0, 1]. For
+    # BUY_YES this is P(YES resolves), for BUY_NO it is P(NO resolves) =
+    # 1 - P(YES). Every BUY decision MUST set this; the engine sizes and
+    # gates directly on it and does NOT invert or default it (kxbtc15m-
+    # validation-rebuild §2.3: "no default certainty path"). A BUY that
+    # leaves it None is dropped with a logged reason rather than treated as
+    # a sure thing. HOLDs leave it None.
+    fair_probability: float | None = None
+
     bs_probability: float | None = None
     mc_probability: float | None = None
     raw_edge: float | None = None
@@ -77,6 +109,51 @@ class Decision:
     confidence: float | None = None
     entry_price_cents: int | None = None  # the price this decision would pay
     hold_reason: str | None = None
+
+    # Entry band, expressed as the range of contract prices (cents, treating
+    # price as market-implied probability) this decision remains valid for.
+    # None = no band declared (engine does not gate). A strategy that gates
+    # on model probability, not price, should still declare this — it is
+    # the invariant the engine checks the ACTUAL FILL against, since the
+    # fill can land at a worse price than `entry_price_cents` (pessimistic
+    # fills, or a fast-moving market between decision and fill). See
+    # backtest-engine spec: "Entry gates are evaluated against the actual
+    # fill." A fill outside this band is rejected rather than recorded.
+    min_entry_price_cents: int | None = None
+    max_entry_price_cents: int | None = None
+
+    # Fixed-R exit levels (tasks.md 5.1/6.1/6.2, design D2/D3): the
+    # underlying SPOT price (not contract cents) at which the strategy
+    # considers the trade invalidated (stop) or its target reached (target).
+    # None for strategies that don't use fixed-R exits (e.g. crypto_mispricing,
+    # which holds to settlement). This is the strategy's own DIRECTIONAL
+    # reasoning (spot terms, matching how it detected the level) — it is not
+    # what BacktestEngine checks intrabar; see stop/target_price_cents below.
+    stop_price: float | None = None
+    target_price: float | None = None
+
+    # Fixed-R exit levels, CONTRACT-CENTS terms (tasks.md 8.1's engine
+    # extension). KXBTC15M markets are single-strike binaries, not a
+    # continuously-spot-tracking instrument — converting a spot stop/target
+    # into a contract-price trigger would require inverting the Black-
+    # Scholes model, reintroducing exactly the zero-drift assumption design
+    # D2 moved away from just to build an exit check. Instead, the engine
+    # checks THESE fields directly against the market's own 1-minute
+    # contract candles: exit as soon as the contract's own price crosses
+    # `stop_price_cents` (against the position) or `target_price_cents`
+    # (in favor). This matches what a real Kalshi exit order is keyed to
+    # anyway. A strategy that only sets spot-terms stop_price/target_price
+    # (not these) opts out of engine-level intrabar exit simulation.
+    stop_price_cents: int | None = None
+    target_price_cents: int | None = None
+
+    # Free-form, JSON-serializable model metadata for the audit trail
+    # (kxbtc15m-validation-rebuild §4.2: "persist model/version/input
+    # metadata with each estimate"). Primitives only — str / int / float /
+    # bool / None and dicts/lists of those — so `record_signal` can fold it
+    # straight into the persisted context blob. Empty for strategies that
+    # don't produce it.
+    model_meta: dict[str, object] = field(default_factory=dict)
 
 
 @runtime_checkable

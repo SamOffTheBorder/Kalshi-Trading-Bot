@@ -58,7 +58,9 @@ def test_cap_clamps_kelly_output():
         kelly_fraction=0.25,
         max_position_pct=0.05,
     )
-    assert contracts == int((130.0 * 0.05) // 0.30)  # exactly the cap
+    # Budget is divided by effective cost (price + entry fee), not price alone:
+    # 0.30 + fee_rate(0.30) = 0.30 + 0.07*0.30*0.70 = 0.3147
+    assert contracts == int((130.0 * 0.05) // 0.3147)  # exactly the cap
     # and the uncapped Kelly budget would have been bigger:
     assert 0.25 * binary_kelly_fraction(0.9, 0.30) > 0.05
 
@@ -167,6 +169,46 @@ def test_peak_tracks_new_highs():
 def test_threshold_ordering_enforced():
     with pytest.raises(ValueError):
         DrawdownGuard(pause_pct=0.40, halt_pct=0.25, initial_equity=100.0)
+
+
+# --- allow_reentry_after_halt (backtest-only; tasks.md 8.3 finding) --------------
+# Default (allow_reentry_after_halt=False) must stay sticky for any live path —
+# only a human reset() should ever clear a real HALT. This flag exists solely so
+# a single long backtest run isn't permanently zeroed out by one early bad
+# stretch, which is exactly what happened tuning trend_scalp (HALT on
+# 2026-06-17 silently suppressed every evaluation through 2026-09-05).
+
+
+def test_default_still_sticky_after_halt():
+    g = _guard()
+    g.update(70.0)  # ~46% down -> HALTED
+    assert g.update(129.0) == GuardState.HALTED  # recovery doesn't clear it
+
+
+def test_reentry_allowed_recovers_like_pause():
+    g = DrawdownGuard(
+        pause_pct=0.25, halt_pct=0.40, initial_equity=130.0, allow_reentry_after_halt=True
+    )
+    g.update(70.0)  # ~46% down -> HALTED
+    assert g.state == GuardState.HALTED
+    assert g.update(129.0) == GuardState.NORMAL  # recovers instead of staying stuck
+    assert g.allows_new_entries()
+
+
+def test_reentry_allowed_still_reports_ever_halted():
+    g = DrawdownGuard(
+        pause_pct=0.25, halt_pct=0.40, initial_equity=130.0, allow_reentry_after_halt=True
+    )
+    g.update(70.0)
+    g.update(129.0)  # recovered back to NORMAL
+    assert g.ever_halted  # the fact it happened isn't hidden by the recovery
+    assert g.state == GuardState.NORMAL
+
+
+def test_default_never_halted_flag_false_when_never_tripped():
+    g = _guard()
+    g.update(120.0)
+    assert not g.ever_halted
 
 
 # --- EntryThrottle (episode/cluster guard) ---------------------------------------

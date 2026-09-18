@@ -1,0 +1,95 @@
+{% extends "_base.html" %}
+{% block title %}Strategy lab — Kalshi Bot{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Strategy lab — run comparison</h2>
+  <p class="panel-sub">
+    Recent paper / shadow runs side by side, keyed by run id. Gate status is
+    the registry's standing for each strategy — a paper result never changes
+    it. <code>gate_failed</code> and <code>never_gated</code> runs are
+    observation only; the promotion gate is unchanged.
+  </p>
+  {% if comparison %}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th><th>Domain</th><th>Mode</th><th>Strategy</th>
+          <th>Gate</th><th>Status</th>
+          <th class="num">Decisions</th><th class="num">Fills</th>
+          <th class="num">Net PnL</th><th class="num">Flat-sizing PnL</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in comparison %}
+        <tr>
+          <td class="mono">{{ c.run_id[:12] }}</td>
+          <td>{{ c.domain }}</td>
+          <td>{{ c.mode }}</td>
+          <td>{{ c.strategy_id or "—" }}</td>
+          <td>
+            {%- if c.strategy_gate_status == "passed" %}
+              <span class="badge badge-ok">passed</span>
+            {%- elif c.strategy_gate_status == "gate_failed" %}
+              <span class="badge badge-warn">gate failed</span>
+            {%- elif c.strategy_gate_status == "parked" %}
+              <span class="badge badge-warn">parked</span>
+            {%- elif c.strategy_gate_status == "never_gated" %}
+              <span class="badge badge-info">never gated</span>
+            {%- else %}
+              <span class="muted">unknown</span>
+            {%- endif -%}
+          </td>
+          <td>{{ c.status }}</td>
+          <td class="num mono">{{ c.decisions }}</td>
+          <td class="num mono">{{ c.fills }}</td>
+          <td class="num mono">
+            {%- if c.net_pnl_usd is not none %}{{ "%+.2f"|format(c.net_pnl_usd) }}{% else %}—{% endif -%}
+          </td>
+          <td class="num mono">
+            {%- if c.flat_sizing_net_pnl_usd is not none %}{{ "%+.2f"|format(c.flat_sizing_net_pnl_usd) }}{% else %}—{% endif -%}
+          </td>
+          <td class="stat-note">
+            {%- if c.decisions_without_fills %}
+              <span class="badge badge-info">recording, not filling</span>
+              {%- for asset, reason in c.blocked_fill_reasons.items() %} · {{ asset }}: {{ reason }}{% endfor -%}
+            {%- elif c.blocked_fill_reasons %}
+              {%- for asset, reason in c.blocked_fill_reasons.items() %}{{ asset }}: {{ reason }} {% endfor -%}
+            {%- else %}—{% endif -%}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="panel-sub">
+    <strong>Flat-sizing PnL</strong> recomputes each settled prediction trade
+    as a 1-contract position — it isolates per-trade edge from
+    sizing-driven apparent profit (the metric v2 §8.2 added after
+    <code>level_break</code>'s Kelly-compounding artifact). Perp runs leave
+    it blank: perp sizing is the strategy's own signed quantity, not a
+    compounding rule.
+  </p>
+  {% else %}
+  <p class="placeholder">No paper or shadow runs recorded yet. Start one with
+    <code>scripts/run_paper.py</code> or several at once with
+    <code>scripts/run_strategy_lab.py</code>.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Why there is no backtest mode here</h2>
+  <p class="panel-sub">
+    The KXBTC15M walk-forward holdout for <code>trend_scalp</code> and
+    <code>level_break</code> has already been used — both failed the
+    pre-registered gate on trade count (v2 §8.4). Re-running them against
+    that same holdout with new configs would be tuning into a spent
+    holdout, the exact discipline failure that made Phase 1's results
+    untrustworthy. New backtest evidence for those strategies waits for
+    genuinely new data and a new pre-registered split. The lab runs
+    <em>forward</em>, on live paper data, where every observation is
+    out-of-sample because it did not exist when the config was frozen.
+  </p>
+</section>
+{% endblock %}

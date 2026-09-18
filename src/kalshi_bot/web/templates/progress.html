@@ -1,0 +1,111 @@
+{% extends "_base.html" %}
+{% block title %}Build &amp; data progress — Kalshi Bot{% endblock %}
+{% block content %}
+
+<section class="panel panel-hero">
+  <div class="progress-hero">
+    <div>
+      <h1>Build &amp; data progress</h1>
+      <p class="panel-sub">A measured checklist of what is ready, what is collecting now, what has been tested, and what to do next. Percentages describe the evidence visible to this dashboard—not a promise of profitability or permission to trade live.</p>
+    </div>
+    <div class="progress-score" aria-label="{{ progress.overall_percent }} percent overall readiness">
+      <strong>{{ "%.1f"|format(progress.overall_percent) }}%</strong>
+      <span>overall readiness</span>
+    </div>
+  </div>
+  <div class="progress progress-large"><div class="progress-bar" style="width:{{ progress.overall_percent }}%"></div></div>
+  <div class="progress-legend">
+    <span>{{ progress.attention_items }} item(s) need attention</span>
+    <span>{{ progress.running_jobs }} test job(s) running</span>
+  </div>
+  <div class="controls progress-actions">
+    <a class="btn btn-start" href="/data">Manage data capture</a>
+    <a class="btn btn-ghost" href="/operations">Run tests and checks</a>
+    <a class="btn btn-ghost" href="/exports/progress.json">Download all current evidence (JSON)</a>
+  </div>
+</section>
+
+<section class="runtime-grid" aria-label="What is running now">
+  <div class="stat">
+    <div class="stat-label">Capture process</div>
+    <div><span class="badge {% if runtime.capture.running %}badge-ok{% elif runtime.fresh_feeds %}badge-warn{% else %}badge-idle{% endif %}">{% if runtime.capture.running %}running{% elif runtime.fresh_feeds %}external activity{% else %}stopped{% endif %}</span></div>
+    <div class="stat-note">Dashboard PID: {{ runtime.capture.pid or "—" }} · {{ runtime.fresh_feeds }} fresh feed(s)</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Paper engine</div>
+    <div><span class="badge {% if runtime.paper.running %}badge-ok{% else %}badge-idle{% endif %}">{{ "running" if runtime.paper.running else "stopped" }}</span></div>
+    <div class="stat-note">Dashboard PID: {{ runtime.paper.pid or "—" }} · simulated execution only</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Tests / jobs</div>
+    <div><span class="badge {% if runtime.running_jobs %}badge-warn{% else %}badge-idle{% endif %}">{{ runtime.running_jobs }} running</span></div>
+    <div class="stat-note">Results are retained across dashboard restarts</div>
+  </div>
+</section>
+
+<section class="stage-grid" aria-label="Progress by phase">
+  {% for stage in progress.stages %}
+  <a class="stage-card" href="#{{ stage.key }}">
+    <div class="stat-label">{{ stage.title }}</div>
+    <div class="stage-percent">{{ "%.1f"|format(stage.percent) }}%</div>
+    <div class="progress"><div class="progress-bar" style="width:{{ stage.percent }}%"></div></div>
+    <div class="stat-note">{{ stage.description }}</div>
+  </a>
+  {% endfor %}
+</section>
+
+{% for stage in progress.stages %}
+<section class="panel" id="{{ stage.key }}">
+  <div class="section-heading">
+    <div>
+      <h2>{{ stage.title }}</h2>
+      <p class="panel-sub">{{ stage.description }}</p>
+    </div>
+    <strong class="section-percent">{{ "%.1f"|format(stage.percent) }}%</strong>
+  </div>
+  <div class="checklist">
+    {% for item in stage.items %}
+    <article class="check-item check-{{ item.status }}">
+      <div class="check-icon" aria-hidden="true">
+        {% if item.status == "complete" %}✓{% elif item.status == "running" %}↻{% elif item.status == "attention" %}!{% else %}○{% endif %}
+      </div>
+      <div class="check-body">
+        <div class="check-title-row">
+          <h3>{{ item.title }}</h3>
+          {% if item.data_collection %}<span class="badge badge-info">Data collection</span>{% else %}<span class="badge badge-idle">Setup / test</span>{% endif %}
+          <span class="badge {% if item.status == 'complete' %}badge-ok{% elif item.status == 'running' %}badge-warn{% elif item.status == 'attention' %}badge-fail{% else %}badge-idle{% endif %}">{{ item.status|replace('_', ' ') }}</span>
+          <span class="mono check-percent">{{ "%.1f"|format(item.percent) }}%</span>
+        </div>
+        <p>{{ item.description }}</p>
+        <dl class="evidence-list">
+          <div><dt>Current evidence</dt><dd>{{ item.evidence }}</dd></div>
+          {% if item.next_action %}<div><dt>What’s left</dt><dd>{{ item.next_action }}</dd></div>{% endif %}
+        </dl>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <h2>Evidence capture &amp; downloads</h2>
+  <p class="panel-sub">Use these artifacts to keep a dated record, compare sessions, or share a reproducible failure report.</p>
+  <div class="grid-2">
+    <div class="placeholder">
+      <strong>Dashboard evidence bundle</strong><br>
+      Includes every checklist item, feed counts and freshness, sampling quality, validation readiness/status, recent backtests, recent paper runs, and test-job results. Secret-like fields are recursively redacted.
+      <div class="progress-actions"><a class="btn btn-ghost" href="/exports/progress.json">Download JSON snapshot</a></div>
+    </div>
+    <div class="placeholder">
+      <strong>Full test console output</strong><br>
+      Run <code>tests</code> or <code>lint</code> from Operations. Each job stores its exit code, timestamps, command, and up to 1,000,000 characters of output. The latest 100 jobs survive dashboard restarts.
+      <div class="progress-actions"><a class="btn btn-ghost" href="/operations">Open test history</a></div>
+    </div>
+  </div>
+  <div class="callout callout-blue" style="margin-top:14px">
+    <strong>Scope note.</strong> The JSON is a complete dashboard evidence summary, not a raw database dump. Very large candle/trade tables stay in the database so a browser download cannot freeze capture or accidentally copy credentials.
+  </div>
+</section>
+
+{% endblock %}

@@ -1,0 +1,69 @@
+{
+  "assets": [
+    {
+      "asset_id": "BTC",
+      "checked_at": 1789153005,
+      "configured": true,
+      "eligible": true,
+      "failure_reason": null,
+      "market_ticker": "KXBTCPERP",
+      "metadata": {
+        "funding_available": false,
+        "max_leverage": null,
+        "minimum_order_size": 1.0,
+        "multiplier": "0.000100",
+        "reference_index": "BTCUSD_RTI",
+        "status": "active"
+      }
+    },
+    {
+      "asset_id": "ETH",
+      "checked_at": 1789153005,
+      "configured": true,
+      "eligible": true,
+      "failure_reason": null,
+      "market_ticker": "KXETHPERP",
+      "metadata": {
+        "funding_available": false,
+        "max_leverage": null,
+        "minimum_order_size": 1.0,
+        "multiplier": "0.001000",
+        "reference_index": "ETHUSD_RTI",
+        "status": "active"
+      }
+    },
+    {
+      "asset_id": "SOL",
+      "checked_at": 1789153005,
+      "configured": true,
+      "eligible": true,
+      "failure_reason": null,
+      "market_ticker": "KXSOLPERP",
+      "metadata": {
+        "funding_available": false,
+        "max_leverage": null,
+        "minimum_order_size": 1.0,
+        "multiplier": "0.100000",
+        "reference_index": "SOLUSD_RTI",
+        "status": "active"
+      }
+    },
+    {
+      "asset_id": "XRP",
+      "checked_at": 1789153005,
+      "configured": true,
+      "eligible": true,
+      "failure_reason": null,
+      "market_ticker": "KXXRPPERP",
+      "metadata": {
+        "funding_available": false,
+        "max_leverage": null,
+        "minimum_order_size": 1.0,
+        "multiplier": "1.000000",
+        "reference_index": "XRPUSD_RTI",
+        "status": "active"
+      }
+    }
+  ],
+  "registry_assets": 4
+}

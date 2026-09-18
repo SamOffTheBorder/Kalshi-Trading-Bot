@@ -31,6 +31,7 @@ def record_signal(
         market_ticker=decision.market_ticker,
         action=decision.action.value,
         market_yes_price=context.yes_ask_cents,
+        fair_probability=decision.fair_probability,
         bs_probability=decision.bs_probability,
         mc_probability=decision.mc_probability,
         raw_edge=decision.raw_edge,
@@ -49,6 +50,7 @@ def record_signal(
                 "yes_ask_cents": context.yes_ask_cents,
                 "minutes_to_expiry": context.minutes_to_expiry,
                 "extras": context.extras,
+                "model_meta": decision.model_meta,
             }
         ),
     )

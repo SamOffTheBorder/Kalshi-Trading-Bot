@@ -9,6 +9,7 @@ Usage:  uv run python scripts/generate_env_example.py
 
 from __future__ import annotations
 
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -50,6 +51,16 @@ def _default_repr(field) -> str:
         # Forward slashes regardless of platform, so the generated file is
         # identical on Windows dev machines and Linux CI.
         return default.as_posix()
+    # Structured defaults are emitted as JSON so Pydantic Settings can parse
+    # them when an operator copies the example to `.env`.
+    if isinstance(default, (tuple, list, dict)):
+        values = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in default
+        ]
+        return json.dumps(
+            values if isinstance(default, (tuple, list)) else default, separators=(",", ":")
+        )
     return str(default)
 
 

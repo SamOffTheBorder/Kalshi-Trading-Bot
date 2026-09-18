@@ -45,10 +45,24 @@ class DrawdownGuard:
         halt_pct: float,
         initial_equity: float,
         peak_window_s: int | None = None,
+        allow_reentry_after_halt: bool = False,
     ) -> None:
         """`peak_window_s=None` keeps the classic all-time-peak behavior
         (callers that don't pass timestamps). With a window, `update()` must
-        be given `ts` so peaks can age out."""
+        be given `ts` so peaks can age out.
+
+        `allow_reentry_after_halt` MUST stay False for any live-trading path
+        (tasks.md 8.3 finding, 2026-09-06): HALT is deliberately sticky there
+        — only a human `reset()` should ever clear it. It exists only for
+        backtesting a single long window: without it, one bad early stretch
+        permanently zeroes out `allows_new_entries()` for the rest of the
+        run (found while tuning trend_scalp — a HALT on 2026-06-17 silently
+        suppressed every subsequent evaluation through 2026-09-05, making
+        the backtest's trade sample about the guard, not the strategy). With
+        it True, HALT is still logged and `drawdown_all_time` still reports
+        the true peak-to-trough figure (a real 8.4 gate criterion on its
+        own) — only the entry lockout stops being sticky, recovering like
+        PAUSE once drawdown falls back under `halt_pct`."""
         if not 0 < pause_pct < halt_pct < 1:
             raise ValueError(f"require 0 < pause_pct ({pause_pct}) < halt_pct ({halt_pct}) < 1")
         if initial_equity <= 0:
@@ -58,11 +72,13 @@ class DrawdownGuard:
         self.pause_pct = pause_pct
         self.halt_pct = halt_pct
         self.peak_window_s = peak_window_s
+        self.allow_reentry_after_halt = allow_reentry_after_halt
         self.peak_equity = initial_equity
         self.all_time_peak = initial_equity
         self.state = GuardState.NORMAL
         self._drawdown = 0.0
         self._drawdown_all_time = 0.0
+        self._ever_halted = False
         # monotonic-decreasing deque of (ts, equity); front is the window max
         self._peaks: deque[tuple[int, float]] = deque()
 
@@ -100,14 +116,24 @@ class DrawdownGuard:
         self._drawdown_all_time = dd_all_time
 
         if self.state == GuardState.HALTED:
-            return self.state  # sticky until explicit reset
+            if not self.allow_reentry_after_halt:
+                return self.state  # sticky until explicit reset
+            if dd_all_time < self.halt_pct:
+                # Backtest-only recovery path (allow_reentry_after_halt=True):
+                # drawdown has come back under the halt line, so fall through
+                # to re-evaluate PAUSE/NORMAL below instead of staying stuck.
+                pass
+            else:
+                return self.state
 
         if dd_all_time >= self.halt_pct:
-            logger.warning(
-                "DrawdownGuard HALT: all-time drawdown {:.1%} >= {:.1%}",
-                dd_all_time,
-                self.halt_pct,
-            )
+            if self.state != GuardState.HALTED:
+                logger.warning(
+                    "DrawdownGuard HALT: all-time drawdown {:.1%} >= {:.1%}",
+                    dd_all_time,
+                    self.halt_pct,
+                )
+            self._ever_halted = True
             self.state = GuardState.HALTED
         elif dd >= self.pause_pct:
             if self.state != GuardState.PAUSED:
@@ -119,6 +145,14 @@ class DrawdownGuard:
 
     def allows_new_entries(self) -> bool:
         return self.state == GuardState.NORMAL
+
+    @property
+    def ever_halted(self) -> bool:
+        """True if HALT tripped at any point, even after a backtest-only
+        recovery (`allow_reentry_after_halt=True`) has since cleared the
+        state back to NORMAL/PAUSED — the fact it happened at all is itself
+        a real 8.4 gate signal, not something a later recovery should hide."""
+        return self._ever_halted
 
     def reset(self, *, approved_by: str) -> None:
         """Explicit human-initiated recovery from HALTED (or any state)."""

@@ -51,14 +51,15 @@ def test_conforms_to_protocol():
 
 
 def test_fee_adjusted_ev_known_answer():
-    """p=0.60, c=$0.50: EV = 0.6*0.5*0.93 - 0.4*0.5 = 0.279 - 0.20 = 0.079."""
-    assert fee_adjusted_ev(0.60, 0.50) == pytest.approx(0.079, abs=1e-12)
+    """p=0.60, c=$0.50, fee charged at entry win-or-lose (not a cut of winnings):
+    EV = 0.6*0.5 - 0.4*0.5 - fee(0.5) = 0.30 - 0.20 - 0.0175 = 0.0825."""
+    assert fee_adjusted_ev(0.60, 0.50) == pytest.approx(0.0825, abs=1e-12)
 
 
 def test_fee_flips_marginal_edge_to_hold():
-    """Spec scenario: raw edge positive but smaller than the fee impact -> HOLD.
+    """Spec scenario: raw edge positive but smaller than the entry fee -> HOLD.
 
-    p=0.53 vs cost 0.52: raw edge +0.01, fee impact 0.07*0.53*0.48 ≈ 0.0178.
+    p=0.53 vs cost 0.52: raw edge +0.01, entry fee = 0.07*0.52*0.48 ≈ 0.0175.
     """
     raw_edge = 0.53 - 0.52
     assert raw_edge > 0

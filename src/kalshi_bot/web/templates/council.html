@@ -1,0 +1,25 @@
+{% extends "_base.html" %}
+{% block title %}Council â€” Kalshi Bot{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>Agent council lineage</h2>
+  <p class="panel-sub">Read-only view of the frozen evidence, role artifacts, deterministic policy, and final paper admission. Unsafe raw provider output is never rendered.</p>
+  {% if not details %}
+    <p class="empty">No council runs have been recorded.</p>
+  {% else %}
+    <p><span class="mono">{{ details.run.id }}</span> · {{ details.run.specialization_key }} · profile <span class="mono">{{ details.run.profile_id }}:{{ details.run.profile_version }}</span></p>
+    <h3>Evidence bundles</h3>
+    <div class="table-scroll"><table><thead><tr><th>Bundle</th><th>Hash</th><th>Decision timestamp</th></tr></thead><tbody>
+      {% for row in details.evidence %}<tr><td class="mono">{{ row.id }}</td><td class="mono">{{ row.bundle_hash }}</td><td>{{ row.decision_ts }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    <h3>Role artifacts</h3>
+    <div class="table-scroll"><table><thead><tr><th>Role</th><th>Attempt</th><th>Status</th><th>Latency</th><th>Cost</th><th>Raw hash</th></tr></thead><tbody>
+      {% for row in details.verdicts %}<tr><td>{{ row.role }}</td><td>{{ row.attempt }}</td><td>{{ row.status }}</td><td>{{ row.usage.latency_ms or '—' }}</td><td>{{ row.usage.cost_usd }}</td><td class="mono">{{ row.raw_output_hash or '—' }}</td></tr>{% endfor %}
+    </tbody></table></div>
+    <h3>Decisions</h3>
+    <div class="table-scroll"><table><thead><tr><th>Outcome</th><th>Final status</th><th>Reason</th><th>Policy</th></tr></thead><tbody>
+      {% for row in details.decisions %}<tr><td>{{ row.outcome }}</td><td>{{ row.final_status }}</td><td>{{ row.reason or '—' }}</td><td class="mono">{{ row.policy }}</td></tr>{% endfor %}
+    </tbody></table></div>
+  {% endif %}
+</section>
+{% endblock %}

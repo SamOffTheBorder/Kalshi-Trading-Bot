@@ -1,0 +1,387 @@
+{
+  "assets": [
+    {
+      "asset_id": "BTC",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752611,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXBTC15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752611,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 318,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/BTC.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/data/indices/BRTI?ref=blog.cfbenchmarks.com"
+              }
+            ]
+          },
+          "series_ticker": "KXBTC"
+        }
+      ]
+    },
+    {
+      "asset_id": "ETH",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752611,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXETH15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752611,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 390,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/ETH.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/data/indices/ETHUSD_RTI"
+              }
+            ]
+          },
+          "series_ticker": "KXETHD"
+        }
+      ]
+    },
+    {
+      "asset_id": "SOL",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752611,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXSOL15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752612,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 425,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXSOLD"
+        }
+      ]
+    },
+    {
+      "asset_id": "XRP",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752612,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXXRP15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752612,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 165,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/RIPPLE.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/data/indices/XRPUSD_RTI"
+              }
+            ]
+          },
+          "series_ticker": "KXXRPD"
+        }
+      ]
+    },
+    {
+      "asset_id": "DOGE",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752613,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXDOGE15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752613,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 130,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/DOGE.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/data/indices/DOGEUSD_RTI"
+              }
+            ]
+          },
+          "series_ticker": "KXDOGED"
+        }
+      ]
+    },
+    {
+      "asset_id": "BNB",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752613,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXBNB15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752613,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 165,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXBNBD"
+        }
+      ]
+    },
+    {
+      "asset_id": "HYPE",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752614,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXHYPE15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752614,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 165,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO.pdf",
+            "expected_shape": "strike_ladder",
+            "frequency": "hourly",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXHYPED"
+        }
+      ]
+    },
+    {
+      "asset_id": "NEAR",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752614,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXNEAR15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752614,
+          "eligible": false,
+          "failure_reason": "no_active_markets",
+          "metadata": {
+            "active_market_count": 0,
+            "contract_terms_url": null,
+            "expected_shape": null,
+            "frequency": null,
+            "settlement_sources": []
+          },
+          "series_ticker": "KXNEARD"
+        }
+      ]
+    },
+    {
+      "asset_id": "ZEC",
+      "event_series": [
+        {
+          "cadence": "15m",
+          "checked_at": 1788752615,
+          "eligible": true,
+          "failure_reason": null,
+          "metadata": {
+            "active_market_count": 1,
+            "contract_terms_url": "https://assets.kalshi.com/contract_terms/CRYPTO15M.pdf",
+            "expected_shape": "binary",
+            "frequency": "fifteen_min",
+            "settlement_sources": [
+              {
+                "name": "CF Benchmarks",
+                "url": "https://www.cfbenchmarks.com/"
+              }
+            ]
+          },
+          "series_ticker": "KXZEC15M"
+        },
+        {
+          "cadence": "60m",
+          "checked_at": 1788752615,
+          "eligible": false,
+          "failure_reason": "no_active_markets",
+          "metadata": {
+            "active_market_count": 0,
+            "contract_terms_url": null,
+            "expected_shape": null,
+            "frequency": null,
+            "settlement_sources": []
+          },
+          "series_ticker": "KXZECD"
+        }
+      ]
+    },
+    {
+      "asset_id": "LINK",
+      "event_series": [],
+      "reason": "no_event_series_configured"
+    }
+  ],
+  "registry_assets": 10
+}

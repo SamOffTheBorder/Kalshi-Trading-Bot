@@ -16,7 +16,6 @@ def test_defaults_construct_without_any_credentials():
     s = _bare_settings()
     assert s.paper_trading is True
     assert s.kalshi_key_id is None
-    assert s.webull_app_key is None
     assert s.openrouter_api_key is None
 
 
@@ -27,7 +26,6 @@ def test_paper_trading_defaults_on():
 def test_sandbox_and_demo_default_on():
     s = _bare_settings()
     assert s.kalshi_use_demo_env is True
-    assert s.webull_use_sandbox is True
 
 
 def test_halt_threshold_must_exceed_pause_threshold():

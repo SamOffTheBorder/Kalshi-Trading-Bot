@@ -1,0 +1,167 @@
+{
+  "assets": {
+    "BTC": {
+      "primary_binance_perp_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "primary_binance_spot_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "promotion_status": "diagnostic_only",
+      "secondary_coinbase_spot_1h": {
+        "first_ts": 1778911200,
+        "gap_count": 68,
+        "last_ts": 1788721200,
+        "rejected_rows": 0,
+        "rows": 2658,
+        "timestamp_unit": "epoch_s"
+      },
+      "source_comparison": {
+        "aligned_rows": 2518,
+        "left_only_rows": 12074,
+        "left_source": "binance",
+        "left_symbol": "BTCUSDT",
+        "max_abs_price_difference": 3060.0,
+        "max_availability_lag": 10071745,
+        "mean_abs_price_difference": 192.42459491660048,
+        "quote_compatible": true,
+        "right_only_rows": 140,
+        "right_source": "coinbase",
+        "right_symbol": "BTC-USD",
+        "warnings": [
+          "coverage_mismatch"
+        ]
+      }
+    },
+    "ETH": {
+      "primary_binance_perp_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "primary_binance_spot_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "promotion_status": "diagnostic_only",
+      "secondary_coinbase_spot_1h": {
+        "first_ts": 1778911200,
+        "gap_count": 68,
+        "last_ts": 1788721200,
+        "rejected_rows": 0,
+        "rows": 2658,
+        "timestamp_unit": "epoch_s"
+      },
+      "source_comparison": {
+        "aligned_rows": 2518,
+        "left_only_rows": 12074,
+        "left_source": "binance",
+        "left_symbol": "ETHUSDT",
+        "max_abs_price_difference": 114.63999999999987,
+        "max_availability_lag": 10072337,
+        "mean_abs_price_difference": 6.882037331215249,
+        "quote_compatible": true,
+        "right_only_rows": 140,
+        "right_source": "coinbase",
+        "right_symbol": "ETH-USD",
+        "warnings": [
+          "coverage_mismatch"
+        ]
+      }
+    },
+    "SOL": {
+      "primary_binance_perp_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "primary_binance_spot_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "promotion_status": "diagnostic_only",
+      "secondary_coinbase_spot_1h": {
+        "first_ts": null,
+        "gap_count": 0,
+        "last_ts": null,
+        "rejected_rows": 0,
+        "rows": 0,
+        "timestamp_unit": "epoch_s"
+      },
+      "source_comparison": {
+        "binance_comparison_rows": 14592,
+        "coinbase_comparison_rows": 0,
+        "status": "unavailable",
+        "warnings": [
+          "missing_secondary_or_primary_overlap"
+        ]
+      }
+    },
+    "XRP": {
+      "primary_binance_perp_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "primary_binance_spot_1m": {
+        "first_ts": 1735689600000,
+        "gap_count": 0,
+        "last_ts": 1788220740000,
+        "rejected_rows": 0,
+        "rows": 875520,
+        "timestamp_unit": "epoch_ms"
+      },
+      "promotion_status": "diagnostic_only",
+      "secondary_coinbase_spot_1h": {
+        "first_ts": null,
+        "gap_count": 0,
+        "last_ts": null,
+        "rejected_rows": 0,
+        "rows": 0,
+        "timestamp_unit": "epoch_s"
+      },
+      "source_comparison": {
+        "binance_comparison_rows": 14592,
+        "coinbase_comparison_rows": 0,
+        "status": "unavailable",
+        "warnings": [
+          "missing_secondary_or_primary_overlap"
+        ]
+      }
+    }
+  },
+  "generated_at": 1789214066,
+  "notes": [
+    "No historical rows were interpolated or merged.",
+    "Coverage and source comparison are diagnostic-only; no promotion decision is made.",
+    "Missing Coinbase coverage remains unavailable evidence."
+  ],
+  "report_version": "crypto-coverage-source-v1"
+}
