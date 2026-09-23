@@ -97,14 +97,15 @@ class EmergencyControl:
             and self.consecutive_loss_guard.allows_new_entries()
         )
 
-    def snapshot(self) -> HaltState:
-        panel_halted = self._control_panel.snapshot().halted if self._control_panel else False
-        halted = panel_halted or not (
-            self.drawdown_guard.allows_new_entries()
-            and self.daily_loss_guard.allows_new_entries
-            and self.consecutive_loss_guard.allows_new_entries()
-        )
-        return HaltState(halted=bool(halted), reason=self._tripped_reason)
+    def snapshot(self, ts: datetime) -> HaltState:
+        """Return the guard state as of ``ts`` using entry-gate semantics.
+
+        ``DailyLossGuard`` needs the timestamp to apply its UTC-day rollover
+        before reporting whether entries are allowed. Delegating to the shared
+        gate also preserves the control-panel short circuit and avoids a
+        snapshot policy that can drift from actual entry admission.
+        """
+        return HaltState(halted=not self.allows_new_entries(ts), reason=self._tripped_reason)
 
     # -- explicit human recovery ----------------------------------------------
 

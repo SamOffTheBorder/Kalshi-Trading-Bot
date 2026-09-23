@@ -42,6 +42,34 @@ def test_daily_loss_breach_blocks_new_entries():
     assert control.allows_new_entries(_ts()) is False
 
 
+def test_snapshot_reports_daily_loss_breach_without_control_panel():
+    """Snapshot must evaluate the timestamped daily-loss guard, not its method object."""
+    control = _make_control(control_panel=None)
+    control.record_trade_pnl(-25.0, _ts())
+
+    state = control.snapshot(_ts())
+
+    assert state.halted is True
+    assert state.reason == "daily loss guard: -25.00 realized"
+
+
+def test_snapshot_rolls_daily_loss_guard_forward_at_supplied_timestamp():
+    control = _make_control(control_panel=None)
+    control.record_trade_pnl(-25.0, _ts())
+
+    assert control.snapshot(_ts()).halted is True
+    assert control.snapshot(_ts(hour=0).replace(day=7)).halted is False
+
+
+def test_snapshot_preserves_control_panel_halt_after_daily_rollover():
+    panel = ControlPanel()
+    panel.arm()
+    control = _make_control(control_panel=panel)
+    control.record_trade_pnl(-25.0, _ts())
+
+    assert control.snapshot(_ts(hour=0).replace(day=7)).halted is True
+
+
 def test_consecutive_losses_block_new_entries():
     control = _make_control()
     control.record_trade_pnl(-1.0, _ts())

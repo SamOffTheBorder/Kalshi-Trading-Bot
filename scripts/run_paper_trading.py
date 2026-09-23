@@ -342,7 +342,7 @@ def _cycle(
                 decision.action,
                 ticker,
                 halted,
-                control.snapshot().reason,
+                control.snapshot(now_dt).reason,
             )
             continue
         if ticker in broker.open_position_tickers():
